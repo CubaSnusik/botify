@@ -13,6 +13,9 @@ const { ConnectionQueue } = require('./connection-queue')
 const { execute, lookSmooth, fromF3, toF3, stopAllHolds } = require('./commands')
 const screens = require('./screens')
 const { attachCommandSending } = require('./chatfix')
+const { attachEyeRaycast } = require('./eye-raycast')
+const { attachVanillaDigSpeed } = require('./dig-speed')
+const { attachDigDiagnostics } = require('./dig-diagnostics')
 const dns = require('dns').promises
 const net = require('net')
 
@@ -249,6 +252,9 @@ class BotInstance extends EventEmitter {
 
   attach (bot) {
     bot.loadPlugin(pathfinder)
+    // after Mineflayer's own plugins (ray_trace) were injected: crosshair from the eyes, like vanilla
+    // and mining speed from the tool components and server attributes.
+    bot.once('inject_allowed', () => { attachEyeRaycast(bot); attachVanillaDigSpeed(bot) })
     const client = bot._client
     screens.attachDialogs(this, bot) // before login: servers may show dialogs during configuration
     if (!process.env.BOTIFY_NO_CHATFIX) attachCommandSending(bot) // send /commands like vanilla (signed only when they carry a message)
@@ -266,6 +272,10 @@ class BotInstance extends EventEmitter {
         bot.clearControlStates()
         this.update()
       }
+    })
+    attachDigDiagnostics(bot, {
+      file: this.store.path('digging', encodeURIComponent(this.id) + '.json'),
+      log: text => this.log('sys', text)
     })
     const vanillaHooks = process.env.BOTIFY_NO_VANILLA ? null : attachVanillaTick(bot, { perTick: TICKER_ON })
     const movementHooks = vanillaHooks && {

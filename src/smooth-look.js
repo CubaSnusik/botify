@@ -4,6 +4,49 @@ const wrap = a => ((a + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) 
 const clamp = (v, limit) => Math.max(-limit, Math.min(limit, v))
 const EPS = 0.151 * DEG // Mineflayer rounds rotations to 0.15 degree mouse steps
 
+// ---- "human" mode: one hand movement per target ----
+// Minimum-jerk profile (the shape of real point-to-point arm/mouse motions): zero speed and
+// acceleration at both ends, a single smooth peak. The duration follows the angle (longer
+// flicks take longer, Fitts-like), the path bows slightly to one side as a wrist pivot does,
+// and the peak comes a little early. Every random choice is fixed once per movement.
+const minJerk = t => t * t * t * (10 + t * (-15 + 6 * t))
+
+function humanPlan (y0, p0, y1, p1, random = Math.random) {
+  const dy = wrap(y1 - y0)
+  const dp = p1 - p0
+  const dist = Math.hypot(dy, dp)
+  const deg = dist / DEG
+  const ticks = deg < 0.5
+    ? 2
+    : Math.max(4, Math.min(40, Math.round((4 + deg * 0.16 + Math.sqrt(deg) * 0.9) * (0.85 + random() * 0.35))))
+  const side = random() < 0.5 ? -1 : 1
+  return {
+    y0,
+    p0,
+    dy,
+    dp,
+    ticks,
+    k: 0,
+    warp: 0.8 + random() * 0.15,
+    arc: side * Math.min(4 * DEG, dist * (0.03 + random() * 0.06)),
+    tremor: Math.min(0.2 * DEG, dist * 0.01),
+    phase: random() * Math.PI * 2
+  }
+}
+
+function humanPoint (plan) {
+  const t = Math.min(1, plan.k / plan.ticks)
+  const s = t >= 1 ? 1 : minJerk(Math.pow(t, plan.warp))
+  const len = Math.hypot(plan.dy, plan.dp)
+  const ny = len ? -plan.dp / len : 0
+  const np = len ? plan.dy / len : 0
+  const side = Math.sin(Math.PI * s) * (plan.arc + plan.tremor * Math.sin(plan.k * 1.7 + plan.phase))
+  return {
+    yaw: plan.y0 + plan.dy * s + ny * side,
+    pitch: clamp(plan.p0 + plan.dp * s + np * side, Math.PI / 2)
+  }
+}
+
 // One target, advanced BEFORE physics. Completion is delivered AFTER its movement packet.
 // Pathfinding, commands and interactions therefore share both the actual and transmitted view.
 function attachSmoothLook (bot) {
@@ -26,6 +69,16 @@ function attachSmoothLook (bot) {
     pitch = clamp(pitch, Math.PI / 2)
     spinning = false
     if (target && target.mode === mode && Math.abs(wrap(yaw - target.yaw)) < 1e-8 && Math.abs(pitch - target.pitch) < 1e-8) return target.promise
+    // A hand already moving does not restart for a small correction: it bends its end point.
+    if (mode === 'human' && target?.mode === 'human' && target.plan && target.plan.k < target.plan.ticks - 2 &&
+        Math.hypot(wrap(yaw - target.yaw), pitch - target.pitch) < 1 * DEG) {
+      target.yaw = yaw
+      target.pitch = pitch
+      target.cancelled = cancelled
+      target.plan.dy = wrap(yaw - target.plan.y0)
+      target.plan.dp = pitch - target.plan.p0
+      return target.promise
+    }
     target?.resolve(false)
     const next = { yaw, pitch, cancelled, mode }
     next.promise = new Promise(resolve => { next.resolve = resolve })
@@ -94,6 +147,17 @@ function attachSmoothLook (bot) {
         return
       }
       if (target.cancelled()) { cancel(); return }
+      if (target.mode === 'human') {
+        if (!target.plan) target.plan = humanPlan(bot.entity.yaw, bot.entity.pitch, target.yaw, target.pitch)
+        const plan = target.plan
+        plan.k = Math.min(plan.ticks, plan.k + 1)
+        // the last step lands exactly on the target (no snap: minimum-jerk speed is ~0 there)
+        const next = plan.k >= plan.ticks ? { yaw: plan.y0 + wrap(target.yaw - plan.y0), pitch: target.pitch } : humanPoint(plan)
+        yawSpeed = pitchSpeed = 0
+        processed = target
+        rawLook(next.yaw, next.pitch, true).catch(() => cancel())
+        return
+      }
       const dy = wrap(target.yaw - bot.entity.yaw)
       const dp = target.pitch - bot.entity.pitch
       const navigation = target.mode === 'navigation'
@@ -117,4 +181,4 @@ function attachSmoothLook (bot) {
   }
 }
 
-module.exports = { attachSmoothLook }
+module.exports = { attachSmoothLook, humanPlan, humanPoint }

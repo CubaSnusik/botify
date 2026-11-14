@@ -67,6 +67,43 @@ function distance (fixture) {
   return fixture.bot.entity.position.distanceTo(start)
 }
 
+test('26.1 repeated enchanted-axe digs keep START and STOP on separate complete physics ticks', async () => {
+  const f = fixture('26.1', true, true)
+  const { bot } = f
+  require('mineflayer/lib/plugins/digging')(bot)
+  require('../src/dig-speed').attachVanillaDigSpeed(bot)
+  bot.entity.attributes.mining_efficiency = { value: 26, modifiers: [] }
+  bot.heldItem = { type: bot.registry.itemsByName.netherite_axe.id }
+  bot.swingArm = () => bot._client.write('arm_animation', { hand: 0 })
+  const Block = require('prismarine-block')(bot.registry)
+  const log = Block.fromStateId(bot.registry.blocksByName.spruce_log.defaultState, 0)
+  log.position = new Vec3(2, 2, 0)
+  bot.blockAtCursor = () => log
+  const turn = bot.smoothLook.turn(-Math.PI / 2, 0, () => false, 'human')
+  for (let i = 0; i < 60; i++) f.tick()
+  assert.equal(await turn, true)
+  f.packets.length = 0
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const pending = bot.dig(log, 'ignore', 4)
+    const offset = f.packets.length
+    for (let i = 0; i < 3; i++) {
+      const tickOffset = f.packets.length
+      f.tick()
+      const frame = f.packets.slice(tickOffset)
+      assert.equal(frame.at(-1).name, 'tick_end')
+      assert.equal(frame.filter(p => p.name === 'arm_animation').length, 1)
+      const action = frame.find(p => p.name === 'block_dig')
+      assert.equal(action?.params.status, [0, undefined, 2][i])
+      if (i === 0) bot._client.emit('acknowledge_player_digging', { sequenceId: action.params.sequence })
+    }
+    assert.deepEqual(f.packets.slice(offset).filter(p => p.name === 'block_dig').map(p => p.params.sequence),
+      [attempt * 2 + 1, attempt * 2 + 2])
+    bot.emit(`blockUpdate:${log.position}`, log, { type: 0, position: log.position })
+    await pending
+    for (let i = 0; i < 6; i++) f.tick()
+  }
+})
+
 for (const reference of [...require('./reference/walking-26.1.json'), ...require('./reference/walking-26.2.json')]) {
   const version = reference.version || '26.1'
   test(`${version} trajectory matches Java float reference: ${reference.name}`, () => {
@@ -1133,6 +1170,28 @@ test('smooth turn crosses the angle boundary along the short arc', async () => {
   const yaws = f.packets.filter(p => p.name === 'look' || p.name === 'position_look').map(p => p.params.yaw)
   assert.ok(yaws.length > 1)
   assert.ok(yaws.every(yaw => Math.abs(yaw) < 2), 'no full revolution or boundary snap')
+})
+
+test('human turn eases in and out on the wire and resolves on the exact target', async () => {
+  const f = fixture('26.1', true, true)
+  const DEG = Math.PI / 180
+  f.packets.length = 0
+  const start = f.bot.entity.yaw
+  const target = { yaw: start + 80 * DEG, pitch: -25 * DEG }
+  const turn = f.bot.smoothLook.turn(target.yaw, target.pitch, () => false, 'human')
+  let done = false
+  turn.then(v => { done = v })
+  let ticks = 0
+  for (; ticks < 60 && !done; ticks++) { f.tick(); await Promise.resolve() }
+  assert.equal(done, true)
+  assert.ok(ticks >= 10, `a ${80}° hand turn takes time (${ticks} ticks)`)
+  assert.ok(Math.abs(Math.atan2(Math.sin(f.bot.entity.yaw - target.yaw), Math.cos(f.bot.entity.yaw - target.yaw))) < 0.2 * DEG)
+  assert.ok(Math.abs(f.bot.entity.pitch - target.pitch) < 0.2 * DEG)
+  const yaws = f.packets.filter(p => p.name === 'look' || p.name === 'position_look').map(p => p.params.yaw)
+  const steps = yaws.slice(1).map((y, i) => Math.abs(y - yaws[i]))
+  const peak = Math.max(...steps)
+  assert.ok(peak < 12, `peak ${peak}°/tick`)
+  assert.ok(steps[0] < peak * 0.5 && steps.at(-1) < peak * 0.5, 'no snap at the start or end')
 })
 
 test('modern block and item interactions share increasing sequences; ABORT uses zero', () => {

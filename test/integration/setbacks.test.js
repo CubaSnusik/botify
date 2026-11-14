@@ -67,6 +67,7 @@ for (const version of ['26.1', '26.2']) {
     const turns = []
     let lastLook = null
     let sawBreak = false; let sawSwing = false
+    let finishes = 0; let swingsAfterFirstFinish = 0
     const missingSwings = []
     server.on('playerJoin', client => {
       peer = client
@@ -74,6 +75,7 @@ for (const version of ['26.1', '26.2']) {
       client.on('packet', (p, meta) => {
         if (meta.name === 'block_dig' && p.status !== 1) sawBreak = true
         if (meta.name === 'arm_animation') sawSwing = true
+        if (meta.name === 'arm_animation' && finishes === 1) swingsAfterFirstFinish++
         if (['position', 'position_look', 'look', 'flying', 'tick_end'].includes(meta.name)) {
           if (sawBreak && !sawSwing) missingSwings.push(meta.name)
           sawBreak = sawSwing = false
@@ -84,7 +86,13 @@ for (const version of ['26.1', '26.2']) {
         }
         if (meta.name === 'block_dig') {
           digPackets.push({ ...p, look: lastLook, tick: packets.get('tick_end') || 0 })
-          if (p.status === 2) client.write('block_change', { location: p.location, type: registry.blocksByName.air.defaultState })
+          if (p.status === 0) client.write('acknowledge_player_digging', { sequenceId: p.sequence })
+          if (p.status === 2) {
+            finishes++
+            client.write('block_change', { location: p.location,
+              type: finishes === 1 ? registry.blocksByName.glass.defaultState : registry.blocksByName.air.defaultState })
+            client.write('acknowledge_player_digging', { sequenceId: p.sequence })
+          }
         }
       })
       client.write('login', {
@@ -121,10 +129,18 @@ for (const version of ['26.1', '26.2']) {
     assert.equal(bot.physics.botifyWalkingProfile, version, 'auto must enable the profile for the negotiated protocol')
     assert.ok(inst.logs.some(l => l.text.includes(`[движение] протокол ${version}; физика vanilla ${version}`)))
     const replies = []
-    await inst.command('.break 0 -61 2', text => replies.push(text))
+    const breaking = inst.command('.break 0 -61 2', text => replies.push(text))
+    await until(() => finishes === 1, 'first STOP')
+    await inst.command('.dig 0 -61 2', text => replies.push(text))
+    assert.ok(replies.some(text => text.includes('уже удерживается')), 'duplicate command must not cancel the current dig')
+    assert.ok(!replies.includes('готово'), 'same-state correction is not success')
+    await breaking
     assert.ok(replies.includes('готово'), replies.join('; '))
-    assert.deepEqual(digPackets.map(p => p.status), [0, 2])
-    assert.deepEqual(digPackets.map(p => p.sequence), [1, 2])
+    assert.deepEqual(digPackets.map(p => p.status), [0, 2, 0, 2])
+    assert.deepEqual(digPackets.map(p => p.sequence), [1, 2, 3, 4])
+    assert.ok(swingsAfterFirstFinish >= 5, 'keep swinging while waiting for correction and the destroy delay')
+    assert.ok(digPackets[2].tick - digPackets[1].tick >= 5, 'retry respects the destroy delay')
+    assert.ok(digPackets[2].tick - digPackets[1].tick < 30, 'confirmed correction does not impose a five-second timeout')
     assert.deepEqual(missingSwings, [], 'each break action has a swing before the next movement/tick boundary')
     assert.equal(digPackets[0].face, 1, 'crosshair hits the top of the floor block')
     assert.ok(digPackets[0].look.pitch > 20, 'server receives downward aim before START')

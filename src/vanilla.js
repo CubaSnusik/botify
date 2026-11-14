@@ -113,6 +113,9 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
         wireYaw = params.yaw
       }
     }
+    if (name === 'block_dig') bot.emit('botifyDigPacket', {
+      status: params.status, sequence: params.sequence, location: params.location
+    })
     return rawWrite(name, params)
   }
 

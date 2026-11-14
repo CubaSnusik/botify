@@ -16,6 +16,10 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { startFollowing } = require('./follow-navigation')
+const { chopTrees } = require('./tree-chopper')
+const { describeDigSpeed } = require('./dig-speed')
+const { equipDigTool } = require('./dig-tool')
+const { digUntilChanged } = require('./held-dig')
 
 const REACH_BLOCK = 4.5
 const REACH_ENTITY = 3.0
@@ -172,8 +176,14 @@ function goalCenter (g) {
 /**
  * Pass the actual crosshair face to the patched dig plugin without turning the head again.
  */
-async function digWithFace (bot, block, face) {
-  await bot.dig(block, 'ignore', face)
+async function digWithFace (bot, block, face, signal, reply) {
+  if (bot.currentWindow) throw new CmdError('перед копанием закрой открытое окно')
+  if (bot.inventory.selectedItem) throw new CmdError('перед копанием убери предмет с курсора инвентаря')
+  if (signal) {
+    await digUntilChanged(bot, block, face, signal, retries => {
+      if (retries === 1 || retries % 10 === 0) reply?.(`сервер ещё не подтвердил разрушение ${block.name} — продолжаю удерживать копание (повтор ${retries}; .stop — остановить)`)
+    })
+  } else await bot.dig(block, 'ignore', face)
 }
 
 // ---------- held keys (like keeping a mouse button / key pressed) ----------
@@ -214,7 +224,7 @@ async function holdLmb (inst, bot, signal) {
         if (signal.aborted || !b || !b.position.equals(target)) { try { bot.stopDigging() } catch {} }
       }
       bot.on('physicsTick', watch)
-      try { await digWithFace(bot, block, block.face ?? 1) } catch {} finally { bot.off('physicsTick', watch) }
+      try { await digWithFace(bot, block, block.face ?? 1, signal) } catch {} finally { bot.off('physicsTick', watch) }
       if (!alive()) break
       await bot.waitForTicks(5) // vanilla destroy delay between blocks
       continue
@@ -285,7 +295,7 @@ function stopAllHolds (inst) {
 }
 
 /** Walk (if needed) to see the block, equip best tool, look at it, dig it the vanilla way. */
-async function digLegit (inst, block, signal) {
+async function digLegit (inst, block, signal, reply = null, hold = false) {
   const bot = inst.bot
   if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') throw new CmdError('там воздух')
   if (!block.diggable || block.hardness === null || block.hardness < 0) throw new CmdError(`${block.name} нельзя сломать`)
@@ -303,7 +313,12 @@ async function digLegit (inst, block, signal) {
   checkCancel(signal)
 
   const tool = bot.pathfinder.bestHarvestTool(block)
-  if (tool && bot.heldItem?.type !== tool.type) await bot.equip(tool, 'hand')
+  if (tool && bot.heldItem?.type !== tool.type) await equipDigTool(bot, tool, () => checkCancel(signal))
+  if (reply) {
+    const s = describeDigSpeed(bot, block)
+    reply(`в руке ${bot.heldItem?.name ?? 'пусто'} · ${s.ticks} тик. (${fmt(s.ticks / 20)} с)` +
+      (s.efficiency ? ` · эффективность +${fmt(s.efficiency)} (${s.efficiencySource})` : ''))
+  }
 
   await lookAtSmooth(bot, block.position.offset(0.5, 0.5, 0.5), () => signal.aborted)
   checkCancel(signal)
@@ -324,7 +339,7 @@ async function digLegit (inst, block, signal) {
   signal.addEventListener('abort', onAbort, { once: true })
   try {
     const hit = bot.blockAtCursor(REACH_BLOCK)
-    await digWithFace(bot, block, hit?.face ?? 1) // already looking at it — no head snap, real face
+    await digWithFace(bot, block, hit?.face ?? 1, hold ? signal : undefined, reply)
     await bot.waitForTicks(5) // leave the vanilla destroy delay before the next automated block
     checkCancel(signal)
   } catch (e) {
@@ -527,7 +542,7 @@ const COMMANDS = [
     name: 'break',
     aliases: ['dig', 'b'],
     usage: '.break [x y z]',
-    desc: 'сломать блок (без координат — тот, на который смотрит)',
+    desc: 'удерживать копание блока до ответа сервера (.stop — остановить)',
     task: true,
     async run (ctx) {
       const bot = needOnline(ctx.inst)
@@ -541,8 +556,8 @@ const COMMANDS = [
         block = bot.blockAtCursor(REACH_BLOCK)
         if (!block) throw new CmdError('бот ни на что не смотрит')
       }
-      ctx.reply(`ломаю ${block.name} @ ${block.position.x} ${block.position.y} ${block.position.z}`)
-      await digLegit(ctx.inst, block, ctx.signal)
+      ctx.reply(`ломаю ${block.name} @ ${block.position.x} ${block.position.y} ${block.position.z} (.stop — остановить)`)
+      await digLegit(ctx.inst, block, ctx.signal, ctx.reply, true)
       ctx.reply('готово')
     }
   },
@@ -580,6 +595,30 @@ const COMMANDS = [
         }
       }
       ctx.reply(`добыто: ${done}`)
+    }
+  },
+  {
+    name: 'tree',
+    task: true,
+    aliases: ['chop', 'trees'],
+    usage: '.tree [any] [предмет]',
+    desc: 'стоять на месте и рубить деревья shard axe (плавный прицел, ломает препятствия)',
+    task: true,
+    async run (ctx) {
+      const bot = needOnline(ctx.inst)
+      const args = [...ctx.args]
+      const any = args[0]?.toLowerCase() === 'any'
+      if (any) args.shift()
+      await chopTrees(bot, ctx.signal, { requireNatural: !any, item: args.join(' ') }, {
+        look: (yaw, pitch, cancelled) => bot.smoothLook
+          ? bot.smoothLook.turn(yaw, pitch, cancelled, 'human')
+          : lookSmooth(bot, yaw, pitch, 12, cancelled).then(() => true),
+        dig: (block, face) => digWithFace(bot, block, face, ctx.signal, ctx.reply),
+        checkCancel,
+        Cancelled,
+        CmdError,
+        reply: ctx.reply
+      })
     }
   },
   {
@@ -944,6 +983,8 @@ for (const c of COMMANDS) {
 }
 function find (name) { return BY_NAME.get(String(name).toLowerCase().replace(/^\./, '')) }
 
+const activeBreakCommands = new WeakMap()
+
 /**
  * Executes one console line for one bot.
  * reply(text, kind) — kind: 'out' | 'err'
@@ -960,6 +1001,13 @@ async function execute (inst, line, reply) {
   const rest = line.slice(1 + head.length).trim()
   const cmd = find(head)
   if (!cmd) { reply(`неизвестная команда .${head} — смотри .help`, 'err'); return }
+  const breakKey = args.join(' ')
+  const activeBreak = activeBreakCommands.get(inst)
+  if (cmd.name === 'break' && activeBreak && activeBreak.task === inst.task &&
+      activeBreak.bot === inst.bot && activeBreak.key === breakKey) {
+    reply('копание уже удерживается; .stop — остановить', 'sys')
+    return
+  }
 
   const run = async (signal) => {
     const ctx = { inst, bot: inst.bot, args, rest, signal, reply: (t, k = 'out') => reply(t, k) }
@@ -971,7 +1019,15 @@ async function execute (inst, line, reply) {
     }
   }
 
-  if (cmd.task) return inst.runTask(cmd.name, run)
+  if (cmd.task) {
+    const pending = inst.runTask(cmd.name, run)
+    if (cmd.name !== 'break') return pending
+    const entry = { task: inst.task, bot: inst.bot, key: breakKey }
+    activeBreakCommands.set(inst, entry)
+    try { return await pending } finally {
+      if (activeBreakCommands.get(inst) === entry) activeBreakCommands.delete(inst)
+    }
+  }
   return run(new AbortController().signal)
 }
 
