@@ -1,0 +1,26 @@
+{
+  "name": "botify",
+  "version": "0.1.0",
+  "description": "Botify — headless Minecraft bot manager",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:integration": "node --test test/integration/*.test.js",
+    "start": "node scripts/start.js",
+    "web": "node src/server.js --open",
+    "postinstall": "node scripts/patch-26.2.js && node scripts/patch-login.js && node scripts/patch-physics.js && node scripts/patch-pathfinder.js && node scripts/patch-digging.js && node scripts/ensure-electron.js",
+    "patch-26.2": "node scripts/patch-26.2.js"
+  },
+  "dependencies": {
+    "minecraft-assets": "^1.19.0",
+    "mineflayer": "^4.39.0",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-auth": "*",
+    "vec3": "^0.1.10",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^45.3.2"
+  }
+}

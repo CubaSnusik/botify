@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Botify</title>
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="side-top drag">
+        <div class="brand">
+          <img src="logo.svg" alt="" class="brand-logo">
+          <span>Botify</span>
+        </div>
+      </div>
+
+      <label class="search">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        <input id="search" placeholder="Поиск ботов" autocomplete="off" spellcheck="false">
+        <kbd>Ctrl K</kbd>
+      </label>
+
+      <nav class="nav">
+        <button class="nav-item" id="nav-global" data-id="global">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
+          <span>Общая консоль</span>
+          <span class="badge" id="online-badge">0</span>
+        </button>
+      </nav>
+
+      <div class="section-head">
+        <span>Боты</span>
+        <span class="muted" id="bots-count"></span>
+        <div class="spacer"></div>
+        <button class="icon-btn sm" id="connect-all" title="Подключить всех">
+          <svg viewBox="0 0 24 24"><path d="M7 5v14l11-7z"/></svg>
+        </button>
+        <button class="icon-btn sm" id="disconnect-all" title="Отключить всех">
+          <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+      </div>
+
+      <div class="bot-list" id="bot-list"></div>
+
+      <div class="side-bottom">
+        <button class="btn primary grow" id="add-bots">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+          Добавить ботов
+        </button>
+        <button class="icon-btn" id="open-settings" title="Настройки">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar drag" id="topbar"></header>
+      <section class="view" id="view"></section>
+    </main>
+  </div>
+
+  <div id="conn-banner" class="conn-banner hidden">Нет связи с бэкендом — переподключаюсь…</div>
+  <div id="tooltip" class="tooltip hidden"></div>
+  <div id="menu-root"></div>
+  <div id="modal-root"></div>
+  <div id="toasts" class="toasts"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
