@@ -102,15 +102,27 @@ function saveEmptied (file, k, ids) {
   fs.renameSync(tmp, file)
 }
 
-// The server re-opens "Deliver Items" after a confirmed delivery. Walking with
-// any menu open is answered with a setback to the same spot every few ticks,
-// so every window and dialog is closed (and the server given a moment) first.
-async function closeScreens (inst, signal) {
+// After a delivery the server re-opens menus on its own (Deliver Items, then
+// the Orders page). Walking with any menu open is answered with a setback
+// every few ticks, so close everything and keep closing until the server has
+// stayed quiet for a while. `settle` waits for that quiet period even when
+// nothing is open right now (right after a delivery).
+async function closeScreens (inst, signal, { settle = false, quiet = 1200, timeout = 8000 } = {}) {
   const bot = inst.bot
-  if (!bot.currentWindow && !inst.dialog) return
-  if (bot.currentWindow) await bot.closeWindow(bot.currentWindow)
-  if (inst.dialog) inst.dialogClose?.()
-  await require('node:timers/promises').setTimeout(400 + Math.floor(Math.random() * 200), undefined, { signal })
+  const open = () => !!bot.currentWindow || !!inst.dialog
+  if (!settle && !open()) return
+  const sleep = ms => require('node:timers/promises').setTimeout(ms, undefined, { signal })
+  const start = Date.now()
+  let quietSince = Date.now()
+  while (Date.now() - start < timeout) {
+    if (open()) {
+      if (bot.currentWindow) await bot.closeWindow(bot.currentWindow)
+      if (inst.dialog) inst.dialogClose?.()
+      quietSince = Date.now()
+    } else if (Date.now() - quietSince >= quiet) return
+    await sleep(100)
+  }
+  throw new Error('сервер снова и снова открывает меню — не могу его закрыть')
 }
 
 // The same ray test the opener uses (tree-farm farmRay), but from any eye position.

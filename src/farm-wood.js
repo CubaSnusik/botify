@@ -1,6 +1,8 @@
 ﻿'use strict'
 const timers = require('node:timers/promises')
+const { performance } = require('node:perf_hooks')
 const { eyePosition, anglesFrom, viewDirection } = require('./eye-raycast')
+const { clearCursor } = require('./inventory-cursor')
 
 const retryAfter = new WeakMap()
 const BAD_FLOOR = /chest|barrel|shulker|hopper|dispenser|dropper|leaves|furnace|campfire|cactus|magma/
@@ -62,7 +64,35 @@ function dropAimValid (bot, aim) {
   return !!hit?.position.equals(aim.floorPos) && hit.face === 1 && !BAD_FLOOR.test(hit.name)
 }
 
-// Use the pickup/outside-click sequence of tossStack, with pacing and retries.
+// What the server answered after a throw click: slot corrections, setbacks
+// and its chat lines, with times relative to the click.
+function traceDrop (bot, slot) {
+  let start = null
+  const events = []
+  const at = () => start == null ? 'до клика' : `${Math.round(performance.now() - start)} мс`
+  const count = item => item?.itemCount ?? item?.count ?? 0
+  const handlers = {
+    set_slot: p => { if (p.windowId === 0 && p.slot === slot) events.push(`set_slot ${slot}=${count(p.item)} через ${at()}`) },
+    window_items: p => { if (p.windowId === 0) events.push(`window_items stateId ${p.stateId}, слот ${slot}=${count(p.items?.[slot])} через ${at()}`) },
+    position: () => events.push(`откат позиции через ${at()}`)
+  }
+  const onChat = text => { if (start != null && events.length < 8) events.push(`чат «${String(text).slice(0, 80)}»`) }
+  const onClick = p => { if (p.windowId === 0 && (p.slot === slot || p.slot === -999)) events.push(`клик ${p.slot} со stateId ${p.stateId}`) }
+  for (const [name, fn] of Object.entries(handlers)) bot._client.on(name, fn)
+  bot.on('messagestr', onChat)
+  bot.on('botifyClickPacket', onClick)
+  return {
+    mark: () => { start = performance.now() },
+    describe: () => events.length ? events.slice(0, 8).join('; ') : 'без пакетов от сервера по этому слоту',
+    stop: () => {
+      for (const [name, fn] of Object.entries(handlers)) bot._client.off(name, fn)
+      bot.off?.('messagestr', onChat)
+      bot.off?.('botifyClickPacket', onClick)
+    }
+  }
+}
+
+// Throw each stack like the GUI's "drop stack", with aiming and retries.
 async function dropFarmMaterial (bot, signal, { plot, look, reply, checkCancel }, name) {
   const logs = () => bot.inventory.items().filter(i => i.name === name && i.slot >= 9 && i.slot < 45)
   const total = () => logs().reduce((sum, i) => sum + i.count, 0) + (bot.inventory.selectedItem?.name === name ? bot.inventory.selectedItem.count : 0)
@@ -84,38 +114,29 @@ async function dropFarmMaterial (bot, signal, { plot, look, reply, checkCancel }
   const pause = async (ms = 200 + Math.floor(Math.random() * 201)) => {
     check(); await timers.setTimeout(ms, undefined, { signal }); check()
   }
-  const click = async (slot, validate) => {
-    await pause()
+  // The same throw as the GUI's "drop stack" (mineflayer tossStack): pick the
+  // stack up, click outside the window, close the inventory, back to back.
+  // The head is turned before; nothing rotates while the stack is on the cursor.
+  const toss = async slot => {
+    await pause() // before the pickup only; .stop is honoured here
     if (slot >= 36 && bot.lastDigTime != null) {
       const remaining = 500 - (Date.now() - bot.lastDigTime)
       if (remaining > 0) await pause(remaining + 1)
     }
     check()
-    if (!validate()) return false
-    const client = bot._client; const original = client.write
-    let active = true; let stopped = false
-    const guarded = function (packetName, packet) {
-      if (active && packetName === 'window_click') {
-        check()
-        if (stopped || packet.windowId !== 0 || packet.slot !== slot || packet.mode !== 0 || packet.mouseButton !== 0) {
-          throw new Error('выброс дерева отменён: действие инвентаря изменилось')
-        }
-      }
-      return original.call(this, packetName, packet)
-    }
-    client.write = guarded
+    const item = bot.inventory.slots[slot]
+    if (bot.inventory.selectedItem || item?.name !== name || !dropAimValid(bot, aim)) return false
     let cancel; let timer
-    const pending = Promise.resolve().then(() => { check(); return bot.clickWindow(slot, 0, 0) })
+    const pending = bot.tossStack(item)
     const abort = new Promise((resolve, reject) => {
-      cancel = () => { stopped = true; reject(new Error('выброс дерева отменён')) }
+      cancel = () => reject(new Error('выброс дерева отменён'))
       signal.addEventListener('abort', cancel, { once: true })
-      timer = setTimeout(() => { stopped = true; reject(new Error('выброс дерева: клик не завершился за 5 секунд')) }, 5000)
+      timer = setTimeout(() => reject(new Error('выброс дерева: клик не завершился за 5 секунд')), 5000)
       if (signal.aborted) cancel()
     })
     try { await Promise.race([pending, abort]); return true } finally {
-      stopped = true
       clearTimeout(timer); signal.removeEventListener('abort', cancel)
-      pending.finally(() => { active = false; if (client.write === guarded) client.write = original }).catch(() => {})
+      pending.catch(() => {})
     }
   }
   let dropped = 0
@@ -131,25 +152,33 @@ async function dropFarmMaterial (bot, signal, { plot, look, reply, checkCancel }
         const onCollect = packet => { if (packet.collectorEntityId === bot.entity.id) collected = true }
         bot._client.on('collect', onCollect)
         let moved = 0
+        let why = null
+        const trace = traceDrop(bot, slot)
         try {
-          if (!await click(slot, () => !bot.inventory.selectedItem && bot.inventory.slots[slot]?.name === name)) break
           // Inventory pauses and other rotation requests may change the view.
           // Re-aim each stack and let the normal movement tick send the rotation.
           const aligned = await look(aim.yaw, aim.pitch, () => signal.aborted)
           if (aligned) await bot.waitForTicks(2)
           check()
-          const thrown = aligned && await click(-999, () => bot.inventory.selectedItem?.name === name && dropAimValid(bot, aim))
-          // Never send an outside click unless the expected logs are on the cursor.
-          if (bot.inventory.selectedItem?.name === name) {
-            await click(slot, () => bot.inventory.selectedItem?.name === name && !bot.inventory.slots[slot])
-          }
-          await pause()
-          if (!bot.inventory.selectedItem) await bot.closeWindow(bot.inventory)
+          trace.mark()
+          const thrown = aligned && await toss(slot)
+          if (!thrown && !aligned) why = 'клик не отправлен: поворот головы прерван'
+          else if (!thrown) why = `клик не отправлен: ${dropAimValid(bot, aim) ? 'слот или курсор изменились' : 'взгляд не попадает в пол цели'}`
           await pause(800) // Observe delayed corrections before counting success.
           moved = thrown ? Math.min(count, Math.max(0, before - total())) : 0
-        } finally { bot._client.off('collect', onCollect) }
+          if (thrown && moved === 0) why = `сервер вернул стопку (${trace.describe()})`
+        } finally { bot._client.off('collect', onCollect); trace.stop() }
         if (moved > 0) { dropped += moved; break }
-        const reason = collected ? 'инвентарь не освободился; во время выброса был подбор предметов' : 'инвентарь не освободился; выброс не подтверждён'
+        // A rejected outside click can leave the stack on the cursor; put it
+        // back before retrying, or every later hotbar action is blocked.
+        if (bot.inventory.selectedItem && !bot.currentWindow) {
+          checkCancel(signal)
+          if (!await clearCursor(bot, { preferSlot: slot })) throw new Error('выброс дерева: не удалось убрать предмет с курсора')
+        }
+        const where = slot >= 36 ? `хотбар ${slot - 35}${slot - 36 === bot.quickBarSlot ? ', в руке' : ''}` : `слот ${slot}`
+        const reason = collected
+          ? 'инвентарь не освободился; во время выброса был подбор предметов'
+          : `инвентарь не освободился; выброс не подтверждён — ${where}, ${why || 'причина не определена'}`
         if (attempt < 5) {
           reply(`[инвентарь] ${reason} — повтор ${attempt + 1}/5`)
           await pause(800 + Math.floor(Math.random() * 401))

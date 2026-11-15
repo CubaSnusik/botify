@@ -5,14 +5,13 @@ const { receiptMatches, sellerReceiptMatches } = require('../src/order-delivery'
 const { deliver } = require('../src/order-delivery')
 const { EventEmitter } = require('node:events')
 
-test('real inventory clicks stage exactly one item, Escape precedes confirmation, receipt required', async () => {
+function deliverFixture () {
   const registry = require('prismarine-registry')('26.1')
   const windows = require('prismarine-windows')(registry)
   const Item = require('prismarine-item')(registry)
   const w = windows.createWindow(1, 'minecraft:generic_9x4', 'Orders -> Deliver Items')
   w.updateSlot(w.inventoryStart, new Item(registry.itemsByName.spruce_log.id, 64))
   w.updateSlot(w.inventoryStart + 1, new Item(registry.itemsByName.diamond.id, 4))
-  const buyer = { bot: new EventEmitter() }
   const events = []
   let screen = { kind: 'window', title: w.title, ref: w }
   const bot = Object.assign(new EventEmitter(), {
@@ -32,18 +31,40 @@ test('real inventory clicks stage exactly one item, Escape precedes confirmation
       ] }
     }
   })
-  const ui = {
+  const f = { bot, w, events, receipt: 'You delivered 1 Spruce Log and received $ 5.2' }
+  f.ui = {
     inst: { bot, acc: { username: 'Seller' } }, check () {}, pause: async () => {},
-    wait: async predicate => { assert.ok(predicate(screen)); return screen },
+    wait: async (predicate, what) => { if (!predicate(screen)) throw new Error(`таймаут — ${what}`); return screen },
     click: async (s, slot) => {
       assert.equal(events.at(-1), 'escape'); assert.equal(slot, 15)
-      events.push('confirm'); buyer.bot.emit('messagestr', 'Seller delivered you 1 Spruce Log', 'system')
+      events.push('confirm')
+      if (f.receipt) bot.emit('messagestr', f.receipt, 'system')
     }
   }
-  assert.equal(await deliver(ui, buyer, 'spruce_log', 'Spruce Log', 1), 1)
-  assert.equal(buyer.bot.listenerCount('messagestr'), 0)
-  assert.equal(bot.listenerCount('messagestr'), 0)
-  assert.equal(events.at(-1), 'confirm')
+  return f
+}
+
+test('real inventory clicks stage exactly one item, Escape precedes confirmation, seller receipt confirms', async () => {
+  const f = deliverFixture()
+  assert.equal(await deliver(f.ui, 'spruce_log', 'Spruce Log', 1), 1)
+  assert.equal(f.bot.listenerCount('messagestr'), 0)
+  assert.equal(f.events.at(-1), 'confirm')
+})
+
+test('no receipt: after closing the menus the items must be gone from the inventory', async () => {
+  const f = deliverFixture()
+  f.receipt = null
+  // Server took the item: inventory part keeps 63 logs.
+  f.bot.inventory = { items: () => [{ name: 'spruce_log', count: 63 }] }
+  let closed = 0
+  const closeScreens = async () => { closed++; f.bot.currentWindow = null }
+  assert.equal(await deliver(f.ui, 'spruce_log', 'Spruce Log', 1, { closeScreens }), 1)
+  assert.equal(closed, 1)
+  // Refused: the item came back (64 again).
+  const g = deliverFixture()
+  g.receipt = null
+  g.bot.inventory = { items: () => [{ name: 'spruce_log', count: 64 }] }
+  await assert.rejects(deliver(g.ui, 'spruce_log', 'Spruce Log', 1, { closeScreens: async () => { g.bot.currentWindow = null } }), /не принял сдачу/)
 })
 
 test('receipt requires exact seller, quantity and item from the supplied server message', () => {

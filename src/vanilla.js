@@ -32,6 +32,15 @@ const { attachSmoothLook } = require('./smooth-look')
 const LEGACY_ACTIONS = ['start_sneaking', 'stop_sneaking', 'stop_sleeping', 'start_sprinting', 'stop_sprinting',
   'start_riding_jump', 'stop_riding_jump', 'open_inventory', 'start_fall_flying']
 
+const emptyStack = item => !item || !(item.itemCount > 0)
+function vanillaClick (params) {
+  return {
+    ...params,
+    changedSlots: (params.changedSlots || []).map(c => ({ ...c, item: emptyStack(c.item) ? undefined : c.item })),
+    cursorItem: emptyStack(params.cursorItem) ? undefined : params.cursorItem
+  }
+}
+
 /**
  * @param {object} opts.perTick  true when ticker.js drives physics: enables player_input, sprint timing, tick_end
  */
@@ -62,6 +71,9 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
     }
     caps.sequenced = new Set(['block_dig', 'block_place', 'use_item'].filter(name =>
       types[fields[name]]?.[1]?.some(field => field.name === 'sequence')))
+    // 1.21.5+: window_click carries optional hashed stacks; vanilla writes an
+    // empty stack as "absent", mineflayer as a present stack of item 0 ×0.
+    caps.hashedClick = JSON.stringify(types[fields.window_click] || '').includes('"option","HashedSlot"')
     return caps
   }
 
@@ -78,6 +90,25 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
   bot._botifyWireYaw = yaw => encodeYaw(Math.fround((Math.PI - yaw) * (1 / (Math.PI / 180))))
   // A server correction establishes a new absolute rotation; its acknowledgement must not
   // be unwrapped against the old location's yaw. Mineflayer sends that acknowledgement below.
+  // Vanilla keeps a stateId per menu (ClientPacketListener.handleContainerSetSlot /
+  // handleContainerContent): id 0 updates the inventory menu, any other id only
+  // the open container. Mineflayer keeps one global value, so after a barrel the
+  // next inventory click carries the barrel's stateId and the server answers
+  // with a full resync.
+  const menuState = new Map()
+  let openMenu = 0
+  const resetMenus = () => { menuState.clear(); openMenu = 0 }
+  const trackState = p => {
+    if (typeof p?.stateId !== 'number') return
+    if (p.windowId === 0 || (p.windowId === openMenu && openMenu !== 0)) menuState.set(p.windowId, p.stateId)
+  }
+  client.on('window_items', trackState)
+  client.on('set_slot', trackState)
+  client.on('open_window', p => { if (openMenu) menuState.delete(openMenu); openMenu = p.windowId; menuState.set(openMenu, 0) })
+  client.on('close_window', () => { if (openMenu) menuState.delete(openMenu); openMenu = 0 })
+  client.on('login', resetMenus)
+  client.on('start_configuration', resetMenus)
+  bot.on('respawn', resetMenus)
   client.prependListener('position', () => { wireYaw = null })
   client.prependListener('player_rotation', () => { wireYaw = null })
   bot.once('spawn', () => { spawned = true })
@@ -92,6 +123,11 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
         const predicted = name !== 'block_dig' || params.status === 0 || params.status === 2
         params = { ...params, sequence: predicted ? ++sequence : 0 }
       }
+      if (name === 'window_click') {
+        if (menuState.has(params.windowId)) params = { ...params, stateId: menuState.get(params.windowId) }
+        if (getCaps().hashedClick) params = vanillaClick(params)
+      }
+      if (name === 'close_window' && openMenu && params.windowId === openMenu) { menuState.delete(openMenu); openMenu = 0 }
       // replaced by the full per-tick input packet below
       if (name === 'player_input' && getCaps().input) return
       if (name === 'entity_action' && typeof params?.actionId === 'number' && getCaps().translateActions) {
@@ -117,6 +153,7 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
       status: params.status, sequence: params.sequence, location: params.location
     })
     const result = rawWrite(name, params)
+    if (name === 'window_click') bot.emit('botifyClickPacket', { windowId: params.windowId, slot: params.slot, stateId: params.stateId })
     // This means handed to the transport, not acknowledged by the server.
     if (name === 'block_place') bot.emit('botifyPlacePacket', { ...params, itemName: bot.heldItem?.name })
     return result
@@ -182,4 +219,4 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
   }
 }
 
-module.exports = { attachVanillaTick }
+module.exports = { attachVanillaTick, vanillaClick }

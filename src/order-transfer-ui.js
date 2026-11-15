@@ -287,4 +287,39 @@ async function findOrderOnce (ui, order, buyerName, paging) {
   throw new Error('ордер не найден за 100 страниц')
 }
 
-module.exports = { clean, norm, itemName, inventoryCount, currentScreen, fingerprint, makeUI, inputValue, parseCount, countIs, verifyReview, newOrderSlot, createOrder, ownBigOrder, findOwnOrder, matchesOrder, findOrder }
+// One open listing for `item`: "x/y Delivered" (+ price), or null when it is
+// another item, unreadable or already complete.
+function openListing (slot, item) {
+  if (slot?.name !== item) return null
+  const text = clean((slot.lore || []).join(' '))
+  const m = text.match(new RegExp(`(?:^|\\s)${COUNT.source}\\s*\\/\\s*${COUNT.source}\\s*delivered`, 'i'))
+  if (!m) return null
+  const delivered = parseCount(m[1] + (m[2] || ''))
+  const total = parseCount(m[3] + (m[4] || ''))
+  if (!delivered || !total || delivered.value >= total.value) return null
+  const price = text.match(/\$\s*(\d+(?:[.,]\d+)?)\s*(?:each|per item)/i)?.[1]?.replace(',', '.')
+  return { slot: slot.slot, item, amount: total.value, delivered: delivered.value, priceTenths: price ? Math.round(Number(price) * 10) : null }
+}
+
+const DELIVER_ITEMS = /^Orders\s*(?:->|→)\s*Deliver Items$/i
+/**
+ * "/orders <nick>" lists only that player's orders. Open the buyer's open
+ * order for `item` and return { screen: Deliver Items, order } — order is null
+ * when the server jumps straight to Deliver Items. Returns null when the buyer
+ * has no open order for the item (the listing is left open; close it).
+ */
+async function openBuyerOrder (ui, buyerName, item) {
+  if (!/^[A-Za-z0-9_]{1,16}$/.test(buyerName)) throw new Error('некорректный ник покупателя')
+  const screen = await ui.command(`/orders ${buyerName}`)
+  if (screen.kind !== 'window') throw new Error(`/orders ${buyerName} не открыл окно`)
+  if (DELIVER_ITEMS.test(clean(screen.title))) return { screen, order: null }
+  const found = screen.slots.map(s => openListing(s, item)).filter(Boolean)
+  if (!found.length) return null
+  // One order is expected; with several, fill the one with the most left.
+  const order = found.reduce((a, b) => (b.amount - b.delivered > a.amount - a.delivered ? b : a))
+  const previous = await ui.click(screen, order.slot)
+  const next = await ui.wait(s => s?.kind === 'window' && fingerprint(s) !== previous && DELIVER_ITEMS.test(clean(s.title)), 'окно Deliver Items')
+  return { screen: next, order }
+}
+
+module.exports = { clean, norm, itemName, inventoryCount, currentScreen, fingerprint, makeUI, inputValue, parseCount, countIs, verifyReview, newOrderSlot, createOrder, ownBigOrder, findOwnOrder, matchesOrder, findOrder, openListing, openBuyerOrder }

@@ -13,7 +13,20 @@ function receiptMatches (message, seller, amount, displayName) {
     countIs(parseCount(match[2]), amount) && (item === name || item === name + 's' || item === name + 'es')
 }
 
-async function deliver (ui, buyer, itemName, displayName, amount) {
+// Count of `name` in the player's own inventory part of whatever is open.
+function ownCount (bot, name) {
+  const w = bot.currentWindow
+  const slots = w ? w.slots.slice(w.inventoryStart, w.inventoryEnd) : bot.inventory.items()
+  return slots.filter(i => i?.name === name).reduce((n, i) => n + i.count, 0)
+}
+
+/**
+ * Put `amount` items into the open Deliver Items window, Escape, Confirm.
+ * Done when the seller's own receipt ("You delivered N … and received $…")
+ * arrives; without it, after closing every menu the items must be gone from
+ * the inventory (a refused delivery hands them back).
+ */
+async function deliver (ui, itemName, displayName, amount, { closeScreens, sync } = {}) {
   const bot = ui.inst.bot
   const screen = await ui.wait(s => s?.kind === 'window' && /^Orders\s*(?:->|→)\s*Deliver Items$/i.test(clean(s.title)), 'Deliver Items')
   const window = screen.ref
@@ -59,6 +72,8 @@ async function deliver (ui, buyer, itemName, displayName, amount) {
   if (left || window.selectedItem || deposited.some(i => i.name !== itemName) || deposited.reduce((n, i) => n + i.count, 0) !== amount) {
     throw new Error('содержимое окна сдачи не совпадает с ожидаемым количеством')
   }
+  // What stays in the inventory once the delivery went through.
+  const expectLeft = ownCount(bot, itemName)
   // Escape is close_window; only then does the server show Confirm Delivery.
   await bot.closeWindow(window)
   const confirm = await ui.wait(s => s?.kind === 'window' && /^Orders\s*(?:->|→)\s*Confirm Delivery$/i.test(clean(s.title)), 'Confirm Delivery')
@@ -67,22 +82,23 @@ async function deliver (ui, buyer, itemName, displayName, amount) {
   let received = false
   const listener = (message, position) => {
     if (position === 'chat' || position === 'game_info') return
-    if (receiptMatches(message, ui.inst.acc.username, amount, displayName)) received = true
-  }
-  // The probe (1 item) must be confirmed by the buyer — that proves the order
-  // is really theirs. Later batches go to the same order, so the seller's own
-  // "You delivered … and received $…" is accepted too if the buyer's lags.
-  const sellerListener = (message, position) => {
-    if (position === 'chat' || position === 'game_info' || amount <= 1) return
     if (sellerReceiptMatches(message, amount, displayName)) received = true
   }
-  const receiver = buyer.bot
-  receiver.on('messagestr', listener)
-  bot.on('messagestr', sellerListener)
+  bot.on('messagestr', listener)
   try {
     await ui.click(confirm, buttons[0].slot)
-    await ui.wait(() => received, `сообщение о получении ${amount} ${displayName}`, 20000)
-  } finally { receiver.off('messagestr', listener); bot.off('messagestr', sellerListener) }
+    try {
+      await ui.wait(() => received, `сообщение «You delivered ${amount}»`, 15000)
+    } catch (error) {
+      ui.check()
+      if (!closeScreens) throw error
+      // No receipt: a refused delivery returns the items on close.
+      await closeScreens()
+      await sync?.()
+      if (received || ownCount(bot, itemName) <= expectLeft) return amount
+      throw new Error(`сервер не принял сдачу ${amount} ${displayName}: предметы вернулись в инвентарь`)
+    }
+  } finally { bot.off('messagestr', listener) }
   return amount
 }
 
@@ -93,4 +109,4 @@ function sellerReceiptMatches (message, amount, displayName) {
   return countIs(parseCount(match[1]), amount) && (item === name || item === name + 's' || item === name + 'es')
 }
 
-module.exports = { deliver, receiptMatches, sellerReceiptMatches }
+module.exports = { deliver, receiptMatches, sellerReceiptMatches, ownCount }

@@ -1,5 +1,6 @@
 'use strict'
 const { findAxe } = require('./tree-chopper')
+const { clearCursor } = require('./inventory-cursor')
 
 // Farm roles keep separate hotbar slots. Never use equip()'s rotating eviction
 // policy: a full hotbar would otherwise swap the axe back into the inventory.
@@ -30,6 +31,10 @@ function createFarmHotbar (bot, species, { checkCancel, wait, reply }) {
       checkCancel()
       try {
         if (ready(role)) return
+        if (!bot.currentWindow && bot.inventory.selectedItem && await clearCursor(bot)) {
+          reply(`[инвентарь] предмет с курсора возвращён в инвентарь`)
+          checkCancel()
+        }
         if (bot.currentWindow || bot.inventory.selectedItem) throw new Error('открыто окно или предмет остался на курсоре')
         const available = items()
         const matches = roles[role]

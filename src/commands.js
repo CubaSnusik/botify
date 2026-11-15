@@ -371,7 +371,7 @@ const COMMANDS = [
   {
     name: 'transfer',
     usage: '.transfer <предмет> <ник покупателя> [chests [радиус] [reset]]',
-    desc: 'Сдать предмет со всех ботов в ордер покупателя; chests — один большой ордер и вынос из сундуков рядом с продавцом; .stop — отмена',
+    desc: 'Сдать предмет в ордер покупателя (ищется через /orders <ник>); chests — обойти все сундуки между табличками start и end, сдавать по полному инвентарю и вернуться на место; .stop — отмена',
     async run (ctx) {
       stopAllHolds(ctx.inst)
       await require('./order-transfer').runTransfer(ctx.inst.manager, ctx.args, ctx.reply, {

@@ -15,6 +15,7 @@ function fixture (t) {
   const packets = []; const replies = []
   bot._client.write = (name, packet) => packets.push({ name, ...packet, time: Date.now() })
   require('mineflayer/lib/plugins/inventory')(bot, { hideErrors: true })
+  require('mineflayer/lib/plugins/simple_inventory')(bot, { hideErrors: true })
   bot.waitForTicks = async () => {}
   const World = require('prismarine-world')(registry)
   const Chunk = require('prismarine-chunk')(registry)
@@ -42,9 +43,10 @@ test('drops full log stacks from inventory and hotbar using real inventory packe
   const f = fixture(t)
   assert.equal(await finish(t, dropFarmWood(f.bot, f.ac.signal, f.options)), 76)
   const clicks = f.packets.filter(p => p.name === 'window_click')
+  // Same as the GUI's "drop stack": pickup, outside click, close — back to back.
   assert.deepEqual(clicks.map(p => [p.windowId, p.slot, p.mode, p.mouseButton]), [[0, 9, 0, 0], [0, -999, 0, 0], [0, 37, 0, 0], [0, -999, 0, 0]])
   assert.equal(f.packets.filter(p => p.name === 'close_window').length, 2)
-  assert.ok(clicks[1].time - clicks[0].time >= 200)
+  assert.ok(clicks[2].time - clicks[1].time >= 200)
   assert.equal(f.bot.inventory.selectedItem, null)
   for (const slot of [36, 38, 39, 40, 41, 45]) assert.ok(f.bot.inventory.slots[slot])
   assert.ok(f.replies.some(m => /выброшено.*76/.test(m)))
@@ -82,22 +84,23 @@ test('does not touch open containers or send clicks after cancellation', async t
   assert.equal(f.packets.length, 0)
 })
 
-test('server rejecting pickup is retried; outside click requires the expected cursor stack', async t => {
+test('server rejecting the throw is retried and nothing stays on the cursor', async t => {
   const f = fixture(t)
   f.bot.inventory.updateSlot(37, null)
   const authoritative = f.bot.inventory.slots.map(i => Item.toNotch(i))
   const write = f.bot._client.write
-  let pickups = 0
+  let throws = 0
   f.bot._client.write = (name, packet) => {
     write(name, packet)
-    if (name === 'window_click' && packet.slot === 9 && ++pickups <= 5) {
-      f.bot._client.emit('window_items', { windowId: 0, stateId: pickups, items: authoritative, carriedItem: Item.toNotch(null) })
+    if (name === 'window_click' && packet.slot === 9 && ++throws <= 5) {
+      f.bot._client.emit('window_items', { windowId: 0, stateId: throws, items: authoritative, carriedItem: Item.toNotch(null) })
     }
   }
   assert.equal(await finish(t, dropFarmWood(f.bot, f.ac.signal, f.options)), 64)
-  assert.equal(pickups, 6)
-  assert.equal(f.packets.filter(p => p.name === 'window_click' && p.slot === -999).length, 1)
+  assert.equal(throws, 6)
+  assert.ok(f.packets.filter(p => p.name === 'window_click').every(p => p.mode === 0 && p.mouseButton === 0))
   assert.equal(f.replies.filter(m => /повтор \d\/5/.test(m)).length, 5)
+  assert.equal(f.bot.inventory.selectedItem, null)
   assert.equal(f.bot._client.listenerCount('collect'), 0)
 })
 
@@ -112,7 +115,8 @@ test('repeated server rejection pauses cleanup instead of aborting the farm or s
   }
   assert.equal(await finish(t, dropFarmWood(f.bot, f.ac.signal, f.options)), 0)
   const clicks = f.packets.filter(p => p.name === 'window_click').length
-  assert.equal(clicks, 6)
+  assert.equal(clicks, 12) // 6 attempts × (pickup + outside click)
+  assert.equal(f.bot.inventory.selectedItem, null)
   assert.match(f.replies.at(-1), /30 с/)
   assert.equal(await dropFarmWood(f.bot, f.ac.signal, f.options), 0)
   assert.equal(f.packets.filter(p => p.name === 'window_click').length, clicks)
@@ -133,7 +137,7 @@ test('collecting logs into another slot is not counted as freeing inventory', as
   assert.ok(f.replies.some(m => /был подбор/.test(m)))
 })
 
-test('stop after picking up a stack prevents the outside click', async t => {
+test('stop during a toss finishes that toss (nothing left on the cursor) and starts no other', async t => {
   const f = fixture(t)
   const write = f.bot._client.write
   f.bot._client.write = (name, packet) => {
@@ -141,7 +145,9 @@ test('stop after picking up a stack prevents the outside click', async t => {
     if (name === 'window_click') f.ac.abort()
   }
   await finish(t, assert.rejects(dropFarmWood(f.bot, f.ac.signal, f.options)))
-  assert.equal(f.packets.filter(p => p.name === 'window_click').length, 1)
+  t.mock.timers.tick(1000); await flush()
+  assert.deepEqual(f.packets.filter(p => p.name === 'window_click').map(p => p.slot), [9, -999])
+  assert.equal(f.bot.inventory.selectedItem, null)
   assert.equal(f.bot._client.listenerCount('collect'), 0)
 })
 
@@ -190,7 +196,7 @@ test('rotation changed during inventory pauses cannot throw behind the bot', asy
   f.bot.inventory.updateSlot(37, null)
   f.bot.waitForTicks = async () => { f.bot.entity.yaw += Math.PI }
   assert.equal(await finish(t, dropFarmWood(f.bot, f.ac.signal, f.options)), 0)
-  assert.equal(f.packets.filter(p => p.name === 'window_click' && p.slot === -999).length, 0)
+  assert.equal(f.packets.filter(p => p.name === 'window_click').length, 0)
   assert.equal(f.bot.inventory.slots[9].count, 64)
   assert.equal(f.bot.inventory.selectedItem, null)
 })

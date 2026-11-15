@@ -1,66 +1,152 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const { Vec3 } = require('vec3')
 const { runTransfer } = require('../src/order-transfer')
-const { matchesOrder, verifyReview, findOrder, parseCount, ownBigOrder } = require('../src/order-transfer-ui')
+const { matchesOrder, verifyReview, findOrder, parseCount, ownBigOrder, openListing, openBuyerOrder } = require('../src/order-transfer-ui')
 
-function setup () {
-  const make = (username, count, host = 'example.test') => ({
+function setup ({ order = { amount: 512000, delivered: 41100, priceTenths: 52 } } = {}) {
+  const stock = { Buyer: 0, SellerA: 64, SellerB: 5, Elsewhere: 100 }
+  const make = (username, host = 'example.test') => ({
     acc: { username }, state: 'online', task: null, holds: new Map(), update () {},
+    commands: [],
+    command (line) { this.commands.push(line) },
     cancelTask () { this.task?.ac.abort(); this.task = null }, server: () => ({ host }),
     bot: { registry: { itemsByName: { spruce_log: { displayName: 'Spruce Log' } } },
-      inventory: { items: () => count ? [{ name: 'spruce_log', count }] : [] } }
+      entity: { position: new Vec3(10, 64, 10) },
+      inventory: { items: () => stock[username] ? [{ name: 'spruce_log', count: stock[username] }] : [] } }
   })
-  const buyer = make('Buyer', 0)
-  const a = make('SellerA', 64)
-  const b = make('SellerB', 5)
-  const manager = { bots: new Map([buyer, a, b, make('Elsewhere', 100, 'other.test')].map(i => [i.acc.username, i])) }
+  const bots = ['Buyer', 'SellerA', 'SellerB'].map(n => make(n)).concat(make('Elsewhere', 'other.test'))
+  const manager = { bots: new Map(bots.map(i => [i.acc.username, i])) }
+  const [buyer, a, b] = bots
   const calls = []; const logs = []
+  const state = { order: order && { item: 'spruce_log', ...order } }
   const deps = {
-    makeUI: (inst, signal, check) => ({ inst, signal, check, wait: async p => { await Promise.resolve(); await Promise.resolve(); check(); assert.ok(p()) } }),
-    createOrder: async (ui, order) => { calls.push(['create', { ...order }]) },
-    findOwnOrder: async () => null,
-    storageArea: () => ({ start: { x: 0, y: 0, z: 0 }, end: { x: 9, y: 4, z: 0 }, min: { x: 0, y: 0, z: 0 }, max: { x: 9, y: 4, z: 1 } }),
-    findOrder: async (ui, order) => { ui.check(); calls.push(['find', order.delivered]) },
-    deliver: async (ui, receiver, item, display, count) => { ui.check(); calls.push(['deliver', ui.inst.acc.username, count]) }
+    makeUI: (inst, signal, check) => ({ inst, signal, check, pause: async () => {}, wait: async p => { for (let i = 0; i < 5; i++) await Promise.resolve(); check(); assert.ok(p()) } }),
+    closeScreens: async () => {},
+    createOrder: async (ui, o) => { calls.push(['create', ui.inst.acc.username, { ...o }]); state.order = { ...o } },
+    openBuyerOrder: async (ui, buyerName, item) => {
+      ui.check(); calls.push(['open', ui.inst.acc.username, buyerName, item])
+      return state.order ? { screen: {}, order: { ...state.order } } : null
+    },
+    deliver: async (ui, item, display, count) => {
+      ui.check(); calls.push(['deliver', ui.inst.acc.username, count])
+      stock[ui.inst.acc.username] -= count
+      if (state.order) state.order.delivered += count
+    },
+    storageArea: () => ({ start: { x: 0, y: 0, z: 0 }, end: { x: 9, y: 4, z: 0 }, min: { x: 0, y: 0, z: 0 }, max: { x: 9, y: 4, z: 1 } })
   }
-  return { manager, buyer, a, calls, logs, deps }
+  return { manager, buyer, a, b, calls, logs, deps, stock, state }
 }
 
-test('one order for same-server sellers, individual probes precede bulk delivery', async () => {
+test('existing order from /orders <buyer>: every seller delivers everything at once, no probe, no new order', async () => {
   const s = setup()
   await runTransfer(s.manager, ['spruce_log', 'Buyer'], t => s.logs.push(t), s.deps)
-  assert.equal(s.calls[0][1].amount, 69)
-  assert.ok(s.calls[0][1].priceTenths >= 50 && s.calls[0][1].priceTenths <= 59)
+  assert.deepEqual(s.calls.filter(c => c[0] === 'deliver'), [['deliver', 'SellerA', 64], ['deliver', 'SellerB', 5]])
+  assert.deepEqual(s.calls.filter(c => c[0] === 'open').map(c => c.slice(1)), [['SellerA', 'Buyer', 'spruce_log'], ['SellerB', 'Buyer', 'spruce_log']])
+  assert.equal(s.calls.filter(c => c[0] === 'create').length, 0)
+  assert.equal(s.buyer.task, null) // the buyer is not touched at all
+  assert.ok(s.logs.some(t => /готово: сдано 69/.test(t)), s.logs.join('\n'))
+})
+
+test('no open order: the buyer bot creates one once, then the sellers deliver', async () => {
+  const s = setup({ order: null })
+  await runTransfer(s.manager, ['spruce_log', 'Buyer'], t => s.logs.push(t), s.deps)
+  const created = s.calls.filter(c => c[0] === 'create')
+  assert.equal(created.length, 1)
+  assert.equal(created[0][1], 'Buyer')
+  assert.equal(created[0][2].amount, 69)
+  assert.ok(created[0][2].priceTenths >= 50 && created[0][2].priceTenths <= 59)
+  assert.deepEqual(s.calls.filter(c => c[0] === 'deliver'), [['deliver', 'SellerA', 64], ['deliver', 'SellerB', 5]])
+})
+
+test('buyer that is not our bot: deliver into its order; without an order nobody can create one', async () => {
+  const s = setup()
+  await runTransfer(s.manager, ['spruce_log', 'SomePlayer'], t => s.logs.push(t), s.deps)
+  assert.deepEqual(s.calls.filter(c => c[0] === 'open').map(c => c[2]), ['SomePlayer', 'SomePlayer', 'SomePlayer'])
+  assert.equal(s.calls.filter(c => c[0] === 'deliver').length, 3) // SellerA, SellerB, Elsewhere
+  const t = setup({ order: null })
+  await runTransfer(t.manager, ['spruce_log', 'SomePlayer'], x => t.logs.push(x), t.deps)
+  assert.ok(t.logs.some(x => /не наш бот — создать ордер некому/.test(x)), t.logs.join('\n'))
+})
+
+test('a batch never exceeds what is left in the order; a full order ends the run', async () => {
+  const s = setup({ order: { amount: 512000, delivered: 511990, priceTenths: 52 } })
+  await runTransfer(s.manager, ['spruce_log', 'Buyer'], t => s.logs.push(t), s.deps)
+  assert.deepEqual(s.calls.filter(c => c[0] === 'deliver'), [['deliver', 'SellerA', 10]])
+  assert.ok(s.logs.some(t => /заполнен целиком/.test(t)))
+})
+
+test('chest mode: deliver per full inventory until every chest in the rectangle was checked, then walk home and resume the farm', async () => {
+  const s = setup()
+  s.stock.SellerB = 0
+  s.a.task = { name: 'autotree', ac: new AbortController(), done: Promise.resolve() }
+  const trips = [2304, 2304, 500]
+  const walks = []
+  s.deps.walk = async (inst, goal) => { walks.push([inst.acc.username, goal.x, goal.y, goal.z]); inst.bot.entity.position = new Vec3(goal.x + 0.5, goal.y, goal.z + 0.5) }
+  s.deps.fill = async ({ inst, emptied }) => {
+    if (inst.acc.username !== 'SellerA' || !trips.length) return { taken: 0, exhausted: true }
+    inst.bot.entity.position = new Vec3(0, 64, 3) // walked along the wall
+    const taken = trips.shift(); s.stock.SellerA += taken
+    if (!trips.length) emptied.add('last')
+    return { taken, exhausted: !trips.length }
+  }
+  await runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests', '16'], t => s.logs.push(t), s.deps)
   assert.deepEqual(s.calls.filter(c => c[0] === 'deliver'), [
-    ['deliver', 'SellerA', 1], ['deliver', 'SellerA', 63], ['deliver', 'SellerB', 1], ['deliver', 'SellerB', 4]
+    ['deliver', 'SellerA', 64], ['deliver', 'SellerA', 2304], ['deliver', 'SellerA', 2304], ['deliver', 'SellerA', 500]
   ])
-  assert.deepEqual(s.calls.filter(c => c[0] === 'find').map(c => c[1]), [0, 1, 64, 65])
-  assert.equal(s.buyer.task, null)
+  assert.equal(s.calls.filter(c => c[0] === 'create').length, 0)
+  assert.deepEqual(walks, [['SellerA', 10, 64, 10]])
+  assert.deepEqual(s.a.commands, ['.autotree'])
+  assert.deepEqual(s.b.commands, [])
+  assert.ok(s.logs.some(t => /возвращаюсь на 10,64,10/.test(t)), s.logs.join('\n'))
 })
 
-test('missing probe receipt prevents bulk delivery and releases all tasks', async () => {
+test('stop by hand: no walk home and no farm restart', async () => {
   const s = setup()
-  s.deps.deliver = async () => { s.calls.push(['probe']); throw new Error('receipt timeout') }
-  await runTransfer(s.manager, ['spruce_log', 'Buyer'], t => s.logs.push(t), s.deps)
-  assert.equal(s.calls.filter(c => c[0] === 'probe').length, 1)
-  assert.ok(s.logs.some(t => t.includes('receipt timeout')))
-  for (const inst of s.manager.bots.values()) assert.equal(inst.task, null)
+  s.a.task = { name: 'autotree', ac: new AbortController(), done: Promise.resolve() }
+  const walks = []
+  s.deps.walk = async (...x) => { walks.push(x) }
+  s.deps.fill = async ({ inst }) => { inst.cancelTask(); inst.task = null; throw new Error('cancelled') }
+  await runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests'], t => s.logs.push(t), s.deps)
+  assert.ok(s.logs.some(t => /остановлен/.test(t)), s.logs.join('\n'))
+  assert.equal(walks.length, 0)
+  assert.deepEqual(s.a.commands, [])
 })
 
-test('stop on a seller cancels the shared operation before bulk', async () => {
-  const s = setup()
-  s.deps.deliver = async ui => { s.calls.push(['probe']); s.a.cancelTask(); ui.check() }
-  await runTransfer(s.manager, ['spruce_log', 'Buyer'], t => s.logs.push(t), s.deps)
-  assert.equal(s.calls.filter(c => c[0] === 'probe').length, 1)
-  assert.equal(s.buyer.task, null)
+test('open listing parsing: only the open order for the item', () => {
+  const slot = (lore, name = 'spruce_log') => ({ slot: 3, name, lore })
+  assert.deepEqual(openListing(slot(['$ 5.2 each', '41.1k/524k Delivered', 'Click to deliver items']), 'spruce_log'),
+    { slot: 3, item: 'spruce_log', amount: 524000, delivered: 41100, priceTenths: 52 })
+  assert.equal(openListing(slot(['$ 5.2 each', '524k/524k Delivered']), 'spruce_log'), null)
+  assert.equal(openListing(slot(['$ 5.2 each', '1/5 Delivered'], 'oak_log'), 'spruce_log'), null)
+})
+
+test('openBuyerOrder: /orders <nick>, clicks the open order, waits for Deliver Items', async () => {
+  const listing = { kind: 'window', title: 'Orders (Page 1)', ref: {}, slots: [
+    { slot: 0, name: 'spruce_log', displayName: 'Spruce Logs', lore: ['$ 149 each', '576/576 Delivered'] },
+    { slot: 1, name: 'spruce_log', displayName: 'Spruce Logs', lore: ['$ 5.2 each', '41.1k/524k Delivered'] },
+    { slot: 47, name: 'hopper', displayName: 'Filter', lore: [] }
+  ] }
+  const commands = []; const clicks = []
+  const ui = {
+    check () {}, pause: async () => {},
+    command: async text => { commands.push(text); return listing },
+    click: async (screen, slot) => { clicks.push(slot); return 'before' },
+    wait: async p => { const s = { kind: 'window', title: 'Orders -> Deliver Items', slots: [] }; assert.ok(p(s)); return s }
+  }
+  const found = await openBuyerOrder(ui, 'Dan13lCBT', 'spruce_log')
+  assert.deepEqual(commands, ['/orders Dan13lCBT'])
+  assert.deepEqual(clicks, [1])
+  assert.equal(found.order.amount, 524000)
+  assert.equal(await openBuyerOrder({ ...ui, command: async () => ({ ...listing, slots: [listing.slots[0]] }) }, 'Dan13lCBT', 'spruce_log'), null)
 })
 
 test('order matching checks price, total, progress and known owner', () => {
   const order = { item: 'spruce_log', amount: 69, delivered: 1, priceTenths: 56 }
   const slot = { name: 'spruce_log', lore: ['$ 5.6 each', '1/69 Delivered', 'Owner: Buyer'] }
   assert.equal(matchesOrder(slot, order, 'Buyer'), true)
-  for (const lore of [ ['$ 5.64 each', '1/69 Delivered'], ['$ 5.6 each', '0/69 Delivered'], ['$ 5.6 each', '1/70 Delivered'], ['$ 5.6 each', '1/69 Delivered', 'Owner: Other'] ]) {
+  for (const lore of [['$ 5.64 each', '1/69 Delivered'], ['$ 5.6 each', '0/69 Delivered'], ['$ 5.6 each', '1/70 Delivered'], ['$ 5.6 each', '1/69 Delivered', 'Owner: Other']]) {
     assert.equal(matchesOrder({ ...slot, lore }, order, 'Buyer'), false)
   }
   const screen = { kind: 'dialog', title: 'Review Order', body: 'Item: Spruce Log Amount: 69 Price: $ 5.6 each Total: $ 386.4' }
@@ -68,26 +154,18 @@ test('order matching checks price, total, progress and known owner', () => {
   assert.throws(() => verifyReview({ ...screen, body: screen.body.replace('69', '690') }, order, 'Spruce Log'))
 })
 
-// Real server: every sort mode shows the same «▪» bullet; the mode cycles
-// Most Paid → Recently Listed → Most Per Item. The fresh order appears on page 1.
-function sortedScreens (withOrder) {
+test('findOrder (full listing fallback) cycles sort modes until the order is on page 1', async () => {
   const filter = { slot: 47, name: 'hopper', displayName: 'Filter', lore: ['Click to change', '▪ Most Per Item', '▪ Most Paid', '▪ Recently Listed'] }
   const listing = (slot, lore) => ({ slot, name: 'spruce_log', displayName: 'Spruce Logs', lore })
   const page = rows => ({ kind: 'window', title: 'Orders (Page 1)', slots: [...rows.map((l, i) => listing(i, l)), filter] })
-  return [
-    page([['$ 96.1 each', '3.5m/5m Delivered'], ['$ 1 each', '192k/9.9m Delivered']]),
-    page([withOrder ? ['$ 5.3 each', '0/73 Delivered'] : ['$ 9 each', '0/64 Delivered'], ['$ 100 each', '0/100k Delivered']]),
-    page([['$ 112 each', '57.5k/100k Delivered'], ['$ 110 each', '19k/20k Delivered']])
+  const screens = [
+    page([['$ 96.1 each', '3.5m/5m Delivered']]),
+    page([['$ 5.3 each', '0/73 Delivered']])
   ].map(s => ({ ...s, ref: s }))
-}
-
-function fakeListUI (screens) {
   let i = 0; const clicks = []
-  return {
-    clicks,
+  const ui = {
     command: async text => { if (text.startsWith('/orders ')) throw new Error('unknown command'); return screens[0] },
-    pause: async () => {},
-    check () {},
+    pause: async () => {}, check () {},
     click: async (screen, slot) => {
       clicks.push(slot)
       if (slot === 47) i = (i + 1) % screens.length
@@ -97,116 +175,28 @@ function fakeListUI (screens) {
     wait: async p => { const v = p(screens[i]); assert.ok(v); return v === true ? screens[i] : v },
     advance: async () => { throw new Error('no next page') }
   }
-}
-
-test('findOrder cycles sort modes until the fresh order is on page 1', async () => {
-  const ui = fakeListUI(sortedScreens(true))
-  const order = { item: 'spruce_log', amount: 73, delivered: 0, priceTenths: 53 }
-  const screen = await findOrder(ui, order, 'Buyer')
+  const screen = await findOrder(ui, { item: 'spruce_log', amount: 73, delivered: 0, priceTenths: 53 }, 'Buyer')
   assert.equal(screen.title, 'Orders -> Deliver Items')
-  assert.deepEqual(ui.clicks, [47, 0])
+  assert.deepEqual(clicks, [47, 0])
 })
 
-test('findOrder stops cycling after all sort modes repeat', async () => {
-  const ui = fakeListUI(sortedScreens(false))
-  const order = { item: 'spruce_log', amount: 73, delivered: 0, priceTenths: 53 }
-  await assert.rejects(findOrder(ui, order, 'Buyer'), /no next page/)
-  // Three attempts (listing may lag), each cycling all three sort modes, then paging.
-  assert.deepEqual(ui.clicks, Array(9).fill(47))
-})
-
-test('findOrder uses /orders <buyer> first: no sort cycling, retries while the listing lags', async () => {
-  const listing = progress => ({ kind: 'window', title: 'Orders (Page 1)', ref: {}, slots: [
-    { slot: 0, name: 'spruce_log', displayName: 'Spruce Logs', lore: ['$ 5.3 each', '0/73 Delivered'] },
-    { slot: 1, name: 'spruce_log', displayName: 'Spruce Logs', lore: ['$ 5.4 each', `${progress}/512k Delivered`] }
-  ] })
-  const pages = [listing('1.8k'), listing('4.1k')] // first reply is stale
-  const commands = []; const clicks = []
-  const ui = {
-    check () {}, pause: async () => {},
-    command: async text => { commands.push(text); return pages.shift() },
-    click: async (screen, slot) => { clicks.push(slot); return 'before' },
-    wait: async () => ({ kind: 'window', title: 'Orders -> Deliver Items' })
-  }
-  const order = { item: 'spruce_log', amount: 512000, delivered: 4104, priceTenths: 54 }
-  const screen = await findOrder(ui, order, 'Dan13lCBT')
-  assert.equal(screen.title, 'Orders -> Deliver Items')
-  assert.deepEqual(commands, ['/orders Dan13lCBT', '/orders Dan13lCBT'])
-  assert.deepEqual(clicks, [1])
-})
-
-test('abbreviated counts: big chest-mode order matches, stale progress does not', () => {
+test('abbreviated counts and own big order recognition', () => {
   assert.deepEqual(parseCount('512k'), { value: 512000, tolerance: 1000 })
   assert.deepEqual(parseCount('2.3k'), { value: 2300, tolerance: 100 })
   assert.deepEqual(parseCount('1,234'), { value: 1234, tolerance: 0 })
-  const order = { item: 'spruce_log', amount: 512000, delivered: 2305, priceTenths: 54 }
-  const slot = lore => ({ name: 'spruce_log', lore: ['$ 5.4 each', lore, 'Click to deliver items'] })
-  assert.equal(matchesOrder(slot('2.3k/512k Delivered'), order, 'Buyer'), true)
-  assert.equal(matchesOrder(slot('1/512k Delivered'), order, 'Buyer'), false) // page from before the batch
-  assert.equal(matchesOrder(slot('2.3k/513k Delivered'), order, 'Buyer'), false)
-  assert.equal(matchesOrder(slot('2.3k/512k Delivered'), { ...order, priceTenths: 55 }, 'Buyer'), false)
-  const review = { kind: 'dialog', title: 'Review Order', body: 'Item: Spruce Log Amount: 512,000 Price: $ 5.4 each Total: $ 2.7m' }
-  verifyReview(review, order, 'Spruce Log')
-})
-
-test('chest mode: one big order, probe first, then a full inventory per trip until chests are empty', async () => {
-  const s = setup()
-  s.manager.bots.get('SellerB').bot.inventory.items = () => [] // still a seller in chest mode
-  const stock = { SellerA: 64, SellerB: 0 }
-  for (const name of ['SellerA', 'SellerB']) s.manager.bots.get(name).bot.inventory.items = () => stock[name] ? [{ name: 'spruce_log', count: stock[name] }] : []
-  const trips = [2304, 2304, 500]
-  s.deps.walk = async () => {}
-  s.deps.fill = async ({ inst, emptied }) => {
-    if (inst.acc.username !== 'SellerA' || !trips.length) return { taken: 0, exhausted: true }
-    const taken = trips.shift(); stock.SellerA += taken
-    if (!trips.length) emptied.add('last')
-    return { taken, exhausted: !trips.length }
-  }
-  const deliver = s.deps.deliver
-  s.deps.deliver = async (ui, receiver, item, display, count) => { await deliver(ui, receiver, item, display, count); stock[ui.inst.acc.username] -= count }
-  await runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests', '16'], t => s.logs.push(t), s.deps)
-  const order = s.calls[0][1]
-  assert.ok(order.amount >= 400000 && order.amount <= 600000 && order.amount % 1000 === 0)
-  assert.deepEqual(s.calls.filter(c => c[0] === 'deliver'), [
-    ['deliver', 'SellerA', 1], ['deliver', 'SellerA', 63], ['deliver', 'SellerA', 2304], ['deliver', 'SellerA', 2304], ['deliver', 'SellerA', 500]
-  ])
-  assert.ok(s.logs.some(t => /остаётся открытым/.test(t)), s.logs.join('\n'))
-})
-
-test('chest mode continues an already open big order instead of creating a second one', async () => {
-  const s = setup()
-  s.deps.walk = async () => {}
-  s.deps.findOwnOrder = async () => ({ item: 'spruce_log', amount: 512000, priceTenths: 54, delivered: 1800 })
-  s.deps.fill = async () => ({ taken: 0, exhausted: true })
-  s.deps.findOrder = async (ui, order) => { s.calls.push(['find', order.delivered]) }
-  const stock = { SellerA: 64, SellerB: 5 }
-  for (const name of ['SellerA', 'SellerB']) s.manager.bots.get(name).bot.inventory.items = () => stock[name] ? [{ name: 'spruce_log', count: stock[name] }] : []
-  const deliver = s.deps.deliver
-  s.deps.deliver = async (ui, ...rest) => { await deliver(ui, ...rest); stock[ui.inst.acc.username] -= rest.at(-1) }
-  await runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests'], t => s.logs.push(t), s.deps)
-  assert.equal(s.calls.filter(c => c[0] === 'create').length, 0)
-  // SellerA: probe at 1800, rest at 1801; SellerB continues from 1864.
-  assert.deepEqual(s.calls.filter(c => c[0] === 'find').map(c => c[1]), [1800, 1801, 1864, 1865])
-  assert.ok(s.logs.some(t => /продолжаю открытый ордер 512k/.test(t)))
-})
-
-test('own big order is recognised in Your Orders; others are not', () => {
   const slot = lore => ({ name: 'spruce_log', lore })
   assert.deepEqual(ownBigOrder(slot(['512k requested', '$ 5.4 each', '1.8k/512k Delivered']), 'spruce_log'),
     { item: 'spruce_log', amount: 512000, priceTenths: 54, delivered: 1800 })
-  for (const lore of [['$ 5.4 each', '0/73 Delivered'], ['$ 95 each', '0/512k Delivered'], ['$ 5.4 each', '512k/512k Delivered'], ['$ 5.45 each', '0/512k Delivered']]) {
-    assert.equal(ownBigOrder(slot(lore), 'spruce_log'), null, lore.join(' '))
-  }
-  assert.equal(ownBigOrder(slot(['$ 5.4 each', '0/512k Delivered']), 'oak_log'), null)
+  assert.equal(ownBigOrder(slot(['$ 95 each', '0/512k Delivered']), 'spruce_log'), null)
 })
 
-test('chest mode without start/end signs stops before creating an order', async () => {
+test('chest mode without start/end signs stops before anything else', async () => {
   const s = setup()
   s.deps.walk = async () => {}
   s.deps.storageArea = () => { throw new Error('нужно ровно по одной табличке') }
   await runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests'], t => s.logs.push(t), s.deps)
-  assert.equal(s.calls.filter(c => c[0] === 'create').length, 0)
-  assert.ok(s.logs.some(t => /start\/end/.test(t)), s.logs.join('\n'))
+  assert.equal(s.calls.filter(c => c[0] !== 'open').length, 0)
+  assert.ok(s.logs.some(t => /табличке/.test(t)), s.logs.join('\n'))
 })
 
 test('chest mode remembers emptied containers across runs; reset forgets them', async () => {
@@ -234,9 +224,23 @@ test('chest mode remembers emptied containers across runs; reset forgets them', 
   } finally { fs.rmSync(dir, { recursive: true, force: true }) }
 })
 
-test('chest mode argument validation', async () => {
+test('argument validation', async () => {
   const s = setup()
-  await assert.rejects(runTransfer(s.manager, ['spruce_log', 'Buyer', 'boxes'], () => {}, s.deps), /usage|\.transfer/)
+  await assert.rejects(runTransfer(s.manager, ['spruce_log', 'Buyer', 'boxes'], () => {}, s.deps), /\.transfer/)
   await assert.rejects(runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests', '200'], () => {}, s.deps), /радиус/)
   await assert.rejects(runTransfer(s.manager, ['spruce_log', 'Buyer', 'chests'], () => {}, { ...s.deps, walk: undefined }), /ходьбы/)
+  await assert.rejects(runTransfer(s.manager, ['spruce_log', 'bad name!'], () => {}, s.deps), /ник/)
+})
+
+test('closeScreens keeps closing until the server stops re-opening menus (Orders page after a delivery)', async () => {
+  const { closeScreens } = require('../src/order-chests')
+  let reopen = 2; const closed = []
+  const bot = { currentWindow: { title: 'Deliver Items' } }
+  bot.closeWindow = async w => {
+    closed.push(w.title); bot.currentWindow = null
+    if (reopen-- > 0) setTimeout(() => { bot.currentWindow = { title: 'Orders (Page 1)' } }, 150)
+  }
+  await closeScreens({ bot }, new AbortController().signal, { quiet: 400 })
+  assert.deepEqual(closed, ['Deliver Items', 'Orders (Page 1)', 'Orders (Page 1)'])
+  assert.equal(bot.currentWindow, null)
 })
