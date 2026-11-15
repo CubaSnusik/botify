@@ -369,6 +369,20 @@ function describeItem (i) {
 // ---------- command table ----------
 const COMMANDS = [
   {
+    name: 'transfer',
+    usage: '.transfer <предмет> <ник покупателя> [chests [радиус] [reset]]',
+    desc: 'Сдать предмет со всех ботов в ордер покупателя; chests — один большой ордер и вынос из сундуков рядом с продавцом; .stop — отмена',
+    async run (ctx) {
+      stopAllHolds(ctx.inst)
+      await require('./order-transfer').runTransfer(ctx.inst.manager, ctx.args, ctx.reply, {
+        walk: (inst, goal, signal, target) => pathTo(inst, goal, signal, target),
+        look: inst => (yaw, pitch, cancelled) => inst.bot.smoothLook
+          ? inst.bot.smoothLook.turn(yaw, pitch, cancelled, 'human-fast')
+          : lookSmooth(inst.bot, yaw, pitch, 24, cancelled).then(() => true)
+      })
+    }
+  },
+  {
     name: 'help',
     usage: '.help [команда]',
     desc: 'список команд',

@@ -503,9 +503,10 @@ class BotInstance extends EventEmitter {
     const task = { name, ac }
     this.task = task
     this.update()
-    return fn(ac.signal).finally(() => {
+    task.done = fn(ac.signal).finally(() => {
       if (this.task === task) { this.task = null; this.update() }
     })
+    return task.done
   }
 
   cancelTask () {
@@ -806,6 +807,7 @@ class BotManager extends EventEmitter {
 
     if (/^\.(connect|join)\b/i.test(line)) return this.connectAll(pool.map(b => b.id))
 
+    if (/^\.transfer(?:\s|$)/i.test(line)) pool = pool.slice(0, 1)
     await Promise.all(pool.map(b => {
       const name = b.snapshot().username
       b.log('cmd', `[общая] ${line}`)
