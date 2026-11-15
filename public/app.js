@@ -284,6 +284,7 @@ function onHello (d) {
   renderSidebar()
   const want = S.selected || ls.get('selected', 'global')
   select(S.bots.has(want) || want === 'farm' ? want : 'global', true)
+  renderTpDock()
 }
 
 function applyTheme (t) {
@@ -300,6 +301,7 @@ api.on('bot', (snap) => {
   if (S.selected === snap.id) schedule('view', updateBotView)
   if (S.selected === 'global') schedule('targets', renderTargets, 300)
   if (S.selected === 'farm') updateFarmStatus()
+  schedule('tpdock', renderTpDock)
 })
 
 // coalesce frequent redraws (bots send updates several times per second each)
@@ -318,11 +320,13 @@ api.on('bots', (list) => {
   if (S.selected !== 'global' && !S.bots.has(S.selected)) select('global')
   else if (S.selected === 'global') renderTargets()
   else updateBotView()
+  renderTpDock()
 })
 api.on('removed', ({ id }) => {
   S.bots.delete(id)
   S.order = S.order.filter(x => x !== id)
   renderSidebar()
+  renderTpDock()
   if (S.selected === id) select('global')
 })
 api.on('log', ({ id, entry }) => {
@@ -357,6 +361,32 @@ setInterval(() => {
   if (S.selected && S.bots.get(S.selected)?.state === 'reconnecting') updateBotView()
 }, 1000)
 
+// X/Y/Z inputs: Space jumps to the next field, Enter submits,
+// pasting "100 64 -200" fills all three.
+function coordFields (fields, submit) {
+  fields.forEach((input, i) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit()
+      else if (e.key === ' ') {
+        e.preventDefault()
+        const next = fields[i + 1]
+        if (next) { next.focus(); next.select() }
+      } else if (e.key === 'Backspace' && !input.value && i > 0) {
+        e.preventDefault()
+        const prev = fields[i - 1]
+        prev.focus(); prev.setSelectionRange(prev.value.length, prev.value.length)
+      }
+    })
+    input.addEventListener('paste', (e) => {
+      const parts = (e.clipboardData?.getData('text') || '').trim().split(/[\s,;]+/).filter(Boolean)
+      if (parts.length < 2) return
+      e.preventDefault()
+      parts.slice(0, fields.length - i).forEach((p, k) => { fields[i + k].value = p })
+      fields[Math.min(i + parts.length, fields.length) - 1].focus()
+    })
+  })
+}
+
 // ============================================================
 // Sidebar
 // ============================================================
@@ -367,12 +397,16 @@ function renderSidebar () {
   list.replaceChildren()
   rows.clear()
   const q = S.filter.trim().toLowerCase()
+  // Rows slide in one after another only the first time the list fills.
+  const intro = !S.listShown && S.bots.size > 0
+  if (intro) S.listShown = true
   let shown = 0
   for (const id of S.order) {
     const b = S.bots.get(id)
     if (!b) continue
     if (q && !(botName(b).toLowerCase().includes(q) || b.server.host.toLowerCase().includes(q))) continue
     const row = buildRow(b)
+    if (intro) { row.classList.add('intro'); row.style.animationDelay = `${Math.min(shown, 12) * 35}ms` }
     rows.set(id, row)
     list.append(row)
     shown++
@@ -395,15 +429,14 @@ function buildRow (b) {
     onclick: (e) => { e.stopPropagation(); togglePower(S.bots.get(b.id)) }
   }, icon('power'))
   const row = h('div', {
-    class: 'bot-row' + (S.selected === b.id ? ' active' : ''),
+    class: 'bot-row s-' + b.state + (S.selected === b.id ? ' active' : ''),
     dataset: { id: b.id },
     onclick: () => select(b.id),
     oncontextmenu: (e) => { e.preventDefault(); botMenu(S.bots.get(b.id), e.clientX, e.clientY) }
   },
   headImg(b),
   h('div', { class: 'meta' }, h('div', { class: 'name', title: b.accountIssue?.reason || '' }, botTitle(b)), h('div', { class: 'sub' }, subText(b))),
-  power,
-  h('span', { class: 'dot ' + b.state, title: STATE_LABEL[b.state] })
+  power
   )
   return row
 }
@@ -411,14 +444,13 @@ function buildRow (b) {
 function patchRow (b) {
   const row = rows.get(b.id)
   if (!row) return
+  for (const c of [...row.classList]) if (c.startsWith('s-') && c !== 's-' + b.state) row.classList.remove(c)
+  row.classList.add('s-' + b.state)
   refreshHead(row.querySelector('.head'), b)
   row.querySelector('.name').textContent = botTitle(b)
   row.querySelector('.name').title = b.accountIssue?.reason || ''
   row.querySelector('.power').disabled = !!b.accountIssue
   row.querySelector('.sub').textContent = subText(b)
-  const dot = row.querySelector('.dot')
-  dot.className = 'dot ' + b.state
-  dot.title = STATE_LABEL[b.state]
   row.querySelector('.power').title = isActive(b) ? 'Отключить' : 'Подключить'
 }
 
@@ -481,6 +513,7 @@ function select (id, force = false) {
   if (id === 'global') renderGlobal()
   else if (id === 'farm') renderFarm()
   else renderBot(id)
+  requestAnimationFrame(placeTp)
 }
 
 function updateFarmStatus () {
@@ -605,18 +638,45 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
     if (stick) log.scrollTop = log.scrollHeight
   }
 
+  function setError (msg) {
+    box.classList.toggle('bad', !!msg)
+  }
   function updateSuggest () {
     const v = input.value
-    const m = v.match(/^(@\S+\s+)?\.(\S*)$/)
-    if (!m) { suggest.classList.add('hidden'); sItems = []; return }
-    const q = m[2].toLowerCase()
+    const typed = v.match(/^(@\S+\s+)?\.(\S*)(\s.*)?$/)
+    if (!typed) { suggest.classList.add('hidden'); sItems = []; setError(null); return }
+    const q = typed[2].toLowerCase()
+    // Arguments being typed: show the usage with the current argument lit.
+    if (typed[3] !== undefined) {
+      sItems = []
+      const c = findCommand(q)
+      if (!c) { setError(true); showNote(h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд'); return }
+      const args = typed[3].trim() ? typed[3].trim().split(/\s+/) : []
+      const cur = /\s$/.test(typed[3]) ? args.length : args.length - 1
+      const spec = usageSpec(c.usage)
+      const extra = spec && args.length > spec.max
+      setError(extra)
+      showNote(spec ? usageView(c, spec, cur) : h('code', null, c.usage),
+        extra ? h('span', { class: 'err' }, `лишние аргументы — максимум ${spec.max}`) : c.desc)
+      return
+    }
     sItems = S.commands.filter(c => c.name.startsWith(q) || c.aliases.some(a => a.startsWith(q))).slice(0, 8)
-    if (!sItems.length) { suggest.classList.add('hidden'); return }
+    if (!sItems.length) {
+      setError(!!q)
+      if (q) showNote(h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд')
+      else suggest.classList.add('hidden')
+      return
+    }
+    setError(null)
     sIdx = Math.min(sIdx, sItems.length - 1)
     suggest.replaceChildren(...sItems.map((c, i) => h('div', {
       class: 'it' + (i === sIdx ? ' on' : ''),
       onpointerdown: (e) => { e.preventDefault(); complete(c) }
     }, h('code', null, c.usage), h('span', null, c.desc))))
+    suggest.classList.remove('hidden')
+  }
+  function showNote (main, sub) {
+    suggest.replaceChildren(h('div', { class: 'it note' }, main, sub ? h('span', null, sub) : null))
     suggest.classList.remove('hidden')
   }
   function complete (c) {
@@ -628,6 +688,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
 
   input.addEventListener('input', () => { sIdx = 0; updateSuggest() })
   input.addEventListener('blur', () => setTimeout(() => suggest.classList.add('hidden'), 100))
+  input.addEventListener('focus', () => { if (input.value) updateSuggest() })
   input.addEventListener('keydown', (e) => {
     const sOpen = !suggest.classList.contains('hidden') && sItems.length
     if (e.key === 'Tab') {
@@ -646,6 +707,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
       hi = Math.max(0, Math.min(history.length, hi + (e.key === 'ArrowUp' ? -1 : 1)))
       input.value = history[hi] ?? ''
       suggest.classList.add('hidden')
+      setError(null)
       return
     }
     if (e.key === 'Escape') { suggest.classList.add('hidden'); return }
@@ -661,18 +723,39 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
       hi = history.length
       input.value = ''
       suggest.classList.add('hidden')
+      setError(null)
       onSubmit(v)
     }
   })
 
+  const box = h('div', { class: 'box' }, h('span', { class: 'caret' }, '›'), input,
+    h('button', { class: 'icon-btn sm', title: 'Отправить', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send')))
   const el = h('div', { class: 'console-inner', style: { display: 'contents' } },
     log,
-    h('div', { class: 'prompt' }, suggest,
-      h('div', { class: 'box' }, h('span', { class: 'caret' }, '›'), input,
-        h('button', { class: 'icon-btn sm', title: 'Отправить', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send'))))
+    h('div', { class: 'prompt' }, suggest, box)
   )
   return { el, append, setEntries, focus: () => input.focus(), input }
 }
+const findCommand = (q) => S.commands.find(c => c.name === q || c.aliases.includes(q))
+
+// Arguments of a usage line like ".transfer <предмет> <ник покупателя> [chests [радиус] [reset]]".
+// Usages with alternatives ("|") or free text are not counted.
+function usageSpec (usage) {
+  const rest = usage.replace(/^\.\S+\s*/, '')
+  if (rest.includes('|') || /<текст>|<значение>/.test(rest)) return null
+  const tokens = []; let depth = 0
+  for (const m of rest.matchAll(/<[^>]*>|\[|\]|[^\s[\]<>]+/g)) {
+    if (m[0] === '[') depth++
+    else if (m[0] === ']') depth--
+    else tokens.push({ text: m[0], required: depth === 0 && m[0].startsWith('<') })
+  }
+  return { tokens, max: tokens.length }
+}
+function usageView (c, spec, cur) {
+  return h('code', null, `.${c.name}`, ...spec.tokens.map((t, i) => [' ',
+    h('span', { class: 'arg' + (i === cur ? ' cur' : '') + (t.required ? '' : ' opt') }, t.required ? t.text : `[${t.text}]`)]).flat())
+}
+
 const plural = (n) => (n % 10 === 1 && n % 100 !== 11) ? '' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'а' : 'ов'
 
 // ============================================================
@@ -826,7 +909,7 @@ function renderBot (id) {
     if (parts.some(p => p === '')) { toast('Укажи X и Z (Y можно пропустить)', true); return }
     act('bot.command', { id, line: `.goto ${parts.join(' ')}` })
   }
-  for (const i of [gx, gy, gz]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go() })
+  coordFields([gx, gy, gz], go)
   const cmd = (line) => () => act('bot.command', { id, line })
   const actionsCard = h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h3', null, 'Действия'), h('div', { class: 'spacer' }), h('span', { class: 'task-chip', id: 'task-chip' })),
@@ -965,14 +1048,135 @@ function meter (label, val, max) {
 }
 
 // ---------- server dialogs ----------
+const liveDialog = (b) => b && (b.state === 'online' || b.state === 'connecting') ? b.dialog : null
+// Teleport confirmations float above every page (see renderTpDock).
+const isTpDialog = (d) => !!d && /teleport/i.test(d.title || '')
+
 function renderDialog (b) {
   const card = V.dialogCard
-  const d = b.state === 'online' || b.state === 'connecting' ? b.dialog : null
+  let d = liveDialog(b)
+  if (isTpDialog(d)) d = null
   const key = d ? `${d.seq}|${d.waiting}` : null
   if (key === V.dialogKey) return // rebuild only for a new dialog — keeps what the user typed
   V.dialogKey = key
   if (!d) { card.classList.add('hidden'); card.replaceChildren(); return }
-  const id = b.id
+  card.replaceChildren(
+    h('div', { class: 'card-head' }, h('h3', null, 'Диалог сервера'), h('div', { class: 'spacer' }),
+      d.canEscape ? h('button', { class: 'btn ghost sm', title: 'Как Esc в игре', onclick: () => act('bot.dialogClose', { id: b.id }) }, 'Закрыть') : null),
+    dialogBody(b.id, d)
+  )
+  card.classList.remove('hidden')
+}
+
+// ---------- teleport confirmation dock (all bots, first come first shown) ----------
+const tpQueue = new Map() // bot id -> { seq, at }
+// Dynamic-Island style: the dock grows out of a small pill, collapses back into
+// it between requests and to hide. Animations run one at a time; updates that
+// arrive meanwhile are applied once the current one finishes.
+const tp = { key: null, busy: false, again: false }
+const PILL = { w: 120, h: 34 }
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
+
+// Centre the dock over the console of the current page (whole main area if none).
+function placeTp () {
+  const dock = $('#tp-dock')
+  if (!dock) return
+  const main = $('.main').getBoundingClientRect()
+  const c = $('#view .card.console')?.getBoundingClientRect()
+  const area = c && c.width ? c : main
+  const w = Math.min(420, area.width - 24)
+  dock.style.left = `${area.left - main.left + area.width / 2}px`
+  dock.style.setProperty('--tp-w', `${Math.max(w, 260)}px`)
+}
+window.addEventListener('resize', placeTp)
+
+async function renderTpDock () {
+  if (tp.busy) { tp.again = true; return }
+  syncTpQueue()
+  let dock = $('#tp-dock')
+  if (!dock) { dock = h('div', { id: 'tp-dock', class: 'tp-dock hidden' }, h('div', { class: 'tp-inner' })); $('.main').append(dock) }
+  placeTp()
+  const first = [...tpQueue.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+  const target = first ? `${first[0]}|${first[1].seq}` : null
+  if (target === tp.key) { if (first) fillTp(dock, first[0], false); return }
+  tp.busy = true
+  try {
+    if (tp.key) await islandCollapse(dock, !target)
+    tp.key = target
+    if (target) { fillTp(dock, first[0], true); await islandExpand(dock) }
+  } finally { tp.busy = false }
+  if (tp.again) { tp.again = false; renderTpDock() }
+}
+
+function syncTpQueue () {
+  for (const [id, q] of tpQueue) {
+    const d = liveDialog(S.bots.get(id))
+    if (!isTpDialog(d)) tpQueue.delete(id)
+    else if (d.seq !== q.seq) { q.seq = d.seq; q.at = Date.now() }
+  }
+  for (const b of S.bots.values()) {
+    const d = liveDialog(b)
+    if (isTpDialog(d) && !tpQueue.has(b.id)) tpQueue.set(b.id, { seq: d.seq, at: Date.now() })
+  }
+}
+
+// Build the request (full) or only patch the queue counter / waiting state in place.
+function fillTp (dock, id, full) {
+  const inner = dock.firstChild
+  const b = S.bots.get(id); const d = b.dialog
+  const more = tpQueue.size - 1
+  if (!full) {
+    const count = inner.querySelector('.tp-count')
+    count.textContent = more > 0 ? `ещё ${more}` : ''
+    count.classList.toggle('hidden', more <= 0)
+    if (inner.dataset.waiting === String(!!d.waiting)) return
+    inner.dataset.waiting = String(!!d.waiting)
+    inner.querySelector('.dlg').replaceWith(dialogBody(id, d))
+    return
+  }
+  inner.dataset.waiting = String(!!d.waiting)
+  inner.replaceChildren(
+    h('div', { class: 'card-head' },
+      headImg(b, 'sm'),
+      h('h3', null, botName(b)),
+      h('span', { class: 'tp-count' + (more > 0 ? '' : ' hidden') }, more > 0 ? `ещё ${more}` : ''),
+      h('div', { class: 'spacer' }),
+      d.canEscape ? h('button', { class: 'btn ghost sm', title: 'Как Esc в игре', onclick: () => act('bot.dialogClose', { id }) }, 'Закрыть') : null),
+    dialogBody(id, d)
+  )
+}
+
+async function islandExpand (dock) {
+  dock.classList.remove('hidden')
+  if (reducedMotion()) return
+  const { width, height } = dock.getBoundingClientRect()
+  const grow = dock.animate([
+    { width: `${PILL.w}px`, height: `${PILL.h}px`, borderRadius: `${PILL.h / 2}px`, opacity: 0 },
+    { opacity: 1, offset: 0.12 },
+    { width: `${width}px`, height: `${height}px`, borderRadius: '20px', opacity: 1 }
+  ], { duration: 560, easing: 'cubic-bezier(.3, 1.35, .45, 1)' })
+  const show = dock.firstChild.animate([
+    { opacity: 0, transform: 'scale(.94)', filter: 'blur(6px)' },
+    { opacity: 1, transform: 'none', filter: 'none' }
+  ], { duration: 300, delay: 200, easing: 'ease-out', fill: 'backwards' })
+  await Promise.all([grow.finished, show.finished]).catch(() => {})
+}
+
+async function islandCollapse (dock, hide) {
+  if (reducedMotion()) { if (hide) dock.classList.add('hidden'); return }
+  const { width, height } = dock.getBoundingClientRect()
+  await dock.firstChild.animate([
+    { opacity: 1, filter: 'none' }, { opacity: 0, filter: 'blur(4px)' }
+  ], { duration: 120, easing: 'ease-in', fill: 'forwards' }).finished.catch(() => {})
+  await dock.animate([
+    { width: `${width}px`, height: `${height}px`, borderRadius: '20px', opacity: 1 },
+    { width: `${PILL.w}px`, height: `${PILL.h}px`, borderRadius: `${PILL.h / 2}px`, opacity: hide ? 0 : 1 }
+  ], { duration: hide ? 300 : 240, easing: 'cubic-bezier(.4, 0, .2, 1)', fill: 'forwards' }).finished.catch(() => {})
+  if (hide) { dock.classList.add('hidden'); dock.firstChild.replaceChildren() }
+  for (const a of dock.getAnimations({ subtree: true })) a.cancel()
+}
+
+function dialogBody (id, d) {
 
   const getters = []
   const inputs = d.inputs.map((i) => {
@@ -1004,22 +1208,17 @@ function renderDialog (b) {
   })
   const values = () => Object.fromEntries(getters.map(g => g()))
 
-  card.replaceChildren(
-    h('div', { class: 'card-head' }, h('h3', null, 'Диалог сервера'), h('div', { class: 'spacer' }),
-      d.canEscape ? h('button', { class: 'btn ghost sm', title: 'Как Esc в игре', onclick: () => act('bot.dialogClose', { id }) }, 'Закрыть') : null),
-    h('div', { class: 'dlg' },
-      h('div', { class: 'dlg-title' }, d.title),
-      d.body.filter(t => t.trim()).length ? h('div', { class: 'dlg-body' }, d.body.filter(t => t.trim()).join('\n\n')) : null,
-      inputs.length ? h('div', { class: 'dlg-inputs' }, inputs) : null,
-      d.waiting
-        ? h('div', { class: 'dlg-wait' }, h('span', { class: 'spin' }), 'Ждём ответа сервера…')
-        : h('div', { class: 'dlg-buttons' }, d.buttons.map((btn, n) => h('button', {
-          class: 'btn' + (n === 0 ? ' primary' : ''),
-          title: btn.tooltip || null,
-          onclick: () => act('bot.dialogClick', { id, index: n, values: values() })
-        }, btn.label))))
-  )
-  card.classList.remove('hidden')
+  return h('div', { class: 'dlg' },
+    h('div', { class: 'dlg-title' }, d.title),
+    d.body.filter(t => t.trim()).length ? h('div', { class: 'dlg-body' }, d.body.filter(t => t.trim()).join('\n\n')) : null,
+    inputs.length ? h('div', { class: 'dlg-inputs' }, inputs) : null,
+    d.waiting
+      ? h('div', { class: 'dlg-wait' }, h('span', { class: 'spin' }), 'Ждём ответа сервера…')
+      : h('div', { class: 'dlg-buttons' }, d.buttons.map((btn, n) => h('button', {
+        class: 'btn' + (n === 0 ? ' primary' : ''),
+        title: btn.tooltip || null,
+        onclick: () => act('bot.dialogClick', { id, index: n, values: values() })
+      }, btn.label))))
 }
 
 // ---------- menu GUIs (chests, /tpaccept-style screens) ----------
@@ -1273,7 +1472,7 @@ function renderGlobal () {
     if (parts.some(p => p === '')) { toast('Укажи X и Z', true); return }
     send(`.goto ${parts.join(' ')}`)
   }
-  for (const i of [gx, gy, gz]) i.addEventListener('keydown', (e) => { if (e.key === 'Enter') go() })
+  coordFields([gx, gy, gz], go)
   const actionsCard = h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h3', null, 'Всем сразу')),
     h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, 'Идти')),
