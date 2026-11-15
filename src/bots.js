@@ -6,6 +6,7 @@ require('../scripts/patch-digging')()
 const { EventEmitter } = require('events')
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
+const { isFriend, friendCommand } = require('./friends')
 const { Authflow, Titles } = require('prismarine-auth')
 const { makeAuthHook, resolveSession, tokenExpiresAt } = require('./auth')
 const { isRateLimited, authRetryDelay, isAlreadyOnline } = require('./connection-errors')
@@ -16,6 +17,8 @@ const { attachCommandSending } = require('./chatfix')
 const { attachEyeRaycast } = require('./eye-raycast')
 const { attachVanillaDigSpeed } = require('./dig-speed')
 const { attachDigDiagnostics } = require('./dig-diagnostics')
+const { DiscordWebhook } = require('./discord-webhook')
+const { BotAlerts } = require('./bot-alerts')
 const dns = require('dns').promises
 const net = require('net')
 
@@ -114,6 +117,7 @@ class BotInstance extends EventEmitter {
     this._lookSeq = 0
     this._upd = null
     this._inv = null
+    this.alerts = new BotAlerts(this)
   }
 
   get store () { return this.manager.store }
@@ -138,6 +142,7 @@ class BotInstance extends EventEmitter {
     this.logs.push(entry)
     if (this.logs.length > LOG_LIMIT) this.logs.splice(0, this.logs.length - LOG_LIMIT)
     this.manager.emit('log', this.id, entry)
+    this.alerts.log(kind, entry.text)
   }
 
   setState (state, error = null) {
@@ -159,7 +164,7 @@ class BotInstance extends EventEmitter {
 
   inventoryChanged () {
     if (this._inv) return
-    this._inv = setTimeout(() => { this._inv = null; this.manager.emit('inventory', this.id, this.inventory()) }, 150)
+    this._inv = setTimeout(() => { this._inv = null; this.manager.emit('inventory', this.id, this.inventory()); this.alerts.inventory() }, 150)
   }
 
   // ---- connection ----
@@ -286,6 +291,8 @@ class BotInstance extends EventEmitter {
     this.setbacks = attachSetbackMonitor(bot, (text) => this.log('sys', text), () => this.update())
     let ended = false
     let spawned = false
+    const alertTimer = setInterval(() => this.alerts.inventory(), 5000)
+    alertTimer.unref?.()
 
     // safety net: if we never get to spawn (dead ping, stuck login), give up and let reconnect logic run
     const connectTimeout = setTimeout(() => {
@@ -318,6 +325,8 @@ class BotInstance extends EventEmitter {
 
     bot.once('spawn', () => {
       spawned = true
+      const attack = bot.attack.bind(bot)
+      bot.attack = (entity, ...args) => { if (!isFriend(this, entity)) return attack(entity, ...args) }
       clearTimeout(connectTimeout)
       const mov = new Movements(bot)
       // legit movement: no digging/placing on the way, no pillaring, no free flying
@@ -426,6 +435,7 @@ class BotInstance extends EventEmitter {
     const onEnd = (reason) => {
       if (ended) return
       ended = true
+      clearInterval(alertTimer)
       clearTimeout(connectTimeout)
       if (this.bot !== bot) return
       this.cancelTask()
@@ -709,6 +719,7 @@ class BotManager extends EventEmitter {
   constructor (store) {
     super()
     this.store = store
+    this.discord = new DiscordWebhook()
     this.bots = new Map()
     this.globalLogs = []
     this.connectionQueue = new ConnectionQueue(() => this.store.settings.behavior.joinStagger ?? 1500)
@@ -773,6 +784,11 @@ class BotManager extends EventEmitter {
   async runGlobal (line, targets) {
     line = String(line).trim()
     if (!line) return
+    if (/^\.friend(?:\s|$)/i.test(line)) {
+      try { this.globalLog({ kind: 'out', text: friendCommand(this.store, line.split(/\s+/).slice(1)) }) }
+      catch (error) { this.globalLog({ kind: 'err', text: error.message }) }
+      return
+    }
     let pool = [...this.bots.values()]
     const m = line.match(/^@(\S+)\s+(.*)$/)
     if (m) {

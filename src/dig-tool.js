@@ -22,4 +22,23 @@ async function equipDigTool (bot, item, checkCancel = () => {}) {
   }
 }
 
-module.exports = { equipDigTool }
+// Refresh the item on every attempt: a server correction may move the stack.
+// The caller supplies an abortable delay and its own inventory selection policy.
+async function equipWithRetries (bot, findItem, { checkCancel, wait, onRetry, retries = 5 }) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    checkCancel()
+    try {
+      const item = findItem()
+      if (!item) throw new Error('нужный предмет пока не найден в инвентаре')
+      await equipDigTool(bot, item, checkCancel)
+      return
+    } catch (error) {
+      checkCancel()
+      if (attempt === retries) throw new Error(`не удалось взять предмет после ${retries} повторов — ферма остановлена: ${error.message}`)
+      onRetry(attempt + 1, retries, error)
+      await wait()
+    }
+  }
+}
+
+module.exports = { equipDigTool, equipWithRetries }

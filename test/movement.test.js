@@ -1194,6 +1194,27 @@ test('human turn eases in and out on the wire and resolves on the exact target',
   assert.ok(steps[0] < peak * 0.5 && steps.at(-1) < peak * 0.5, 'no snap at the start or end')
 })
 
+test('fast human farm turns reach the transmitted target quickly without a single-tick snap', async () => {
+  const f = fixture('26.1', true, true)
+  const DEG = Math.PI / 180
+  const yaw = f.bot.entity.yaw + 90 * DEG
+  const pitch = -30 * DEG
+  const turn = f.bot.smoothLook.turn(yaw, pitch, () => false, 'human-fast')
+  let done = false
+  turn.then(value => { done = value })
+  let ticks = 0
+  for (; ticks < 25 && !done; ticks++) { f.tick(); await Promise.resolve() }
+  assert.equal(done, true)
+  assert.ok(ticks >= 5 && ticks <= 16, `fast turn took ${ticks} ticks`)
+  const packets = f.packets.filter(p => ['look', 'position_look'].includes(p.name))
+  const last = packets.at(-1).params
+  assert.ok(Math.abs(last.pitch - 30) <= 0.151)
+  assert.ok(Math.abs(Math.atan2(Math.sin(f.bot.entity.yaw - yaw), Math.cos(f.bot.entity.yaw - yaw))) < 0.2 * DEG)
+  const changes = packets.slice(1).map((p, i) => Math.abs(p.params.yaw - packets[i].params.yaw))
+  assert.ok(Math.max(...changes) < 30)
+  assert.ok(changes.at(-1) < Math.max(...changes) * 0.6)
+})
+
 test('modern block and item interactions share increasing sequences; ABORT uses zero', () => {
   const f = fixture()
   f.bot._client.write('block_dig', { status: 0 })

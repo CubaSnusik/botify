@@ -90,7 +90,7 @@ async function digUntilChanged (bot, block, face, signal, onRetry = () => {}) {
       } catch (error) {
         if (signal?.aborted) throw aborted()
         if (!['BOTIFY_DIG_UNCONFIRMED', 'BOTIFY_DIG_CORRECTED'].includes(error.code)) throw error
-        onRetry(++retries)
+        onRetry(++retries, error)
         if (error.code === 'BOTIFY_DIG_CORRECTED') continue // destroyDelay already elapsed
         // A full attempt already waited five seconds. Release, then leave the normal
         // destroy delay before START. Never send repeated STOP packets while waiting.

@@ -1,5 +1,5 @@
 'use strict'
-const AUTH_RETRY_DELAY = 5 * 60_000 // conservative local fallback, not a promised service recovery time
+const AUTH_RETRY_DELAY = 30_000 // local fallback; an explicit longer Retry-After is still respected
 
 function isRateLimited (err) {
   if (Number(err?.status ?? err?.statusCode ?? err?.response?.status) === 429) return true

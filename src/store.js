@@ -13,6 +13,7 @@ const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
+const { DEFAULT_FARM, farmSettings, friendNames } = require('./farm-settings')
 
 const ROOT = path.resolve(__dirname, '..')
 const DATA_DIR = process.env.BOTIFY_DATA ? path.resolve(process.env.BOTIFY_DATA) : path.join(ROOT, 'data')
@@ -25,7 +26,9 @@ const DEFAULT_SETTINGS = {
     joinStagger: 1500, // ms after each settled login before starting the next queued account
     viewDistance: 'short' // tiny | short | normal | far
   },
-  ui: { theme: 'dark' }
+  ui: { theme: 'dark' },
+  farm: DEFAULT_FARM,
+  friends: []
 }
 
 function readJson (file, fallback) {
@@ -93,6 +96,8 @@ class Store extends EventEmitter {
 
   // ---- settings ----
   updateSettings (patch) {
+    if ('farm' in patch) patch = { ...patch, farm: farmSettings({ ...this.settings.farm, ...patch.farm }) }
+    if ('friends' in patch) patch = { ...patch, friends: friendNames(patch.friends) }
     this.settings = merge(this.settings, patch)
     if (this.settings.server) this.settings.server.port = Number(this.settings.server.port) || null
     this.saveSettings()

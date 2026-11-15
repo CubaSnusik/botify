@@ -283,7 +283,7 @@ function onHello (d) {
   applyTheme(S.settings.ui?.theme || 'dark')
   renderSidebar()
   const want = S.selected || ls.get('selected', 'global')
-  select(S.bots.has(want) ? want : 'global', true)
+  select(S.bots.has(want) || want === 'farm' ? want : 'global', true)
 }
 
 function applyTheme (t) {
@@ -299,6 +299,7 @@ api.on('bot', (snap) => {
   updateCounts()
   if (S.selected === snap.id) schedule('view', updateBotView)
   if (S.selected === 'global') schedule('targets', renderTargets, 300)
+  if (S.selected === 'farm') updateFarmStatus()
 })
 
 // coalesce frequent redraws (bots send updates several times per second each)
@@ -383,6 +384,7 @@ function renderSidebar () {
   }
   updateCounts()
   $('#nav-global').classList.toggle('active', S.selected === 'global')
+  $('#nav-farm').classList.toggle('active', S.selected === 'farm')
 }
 
 function buildRow (b) {
@@ -459,6 +461,7 @@ function copy (text) {
 
 $('#search').addEventListener('input', (e) => { S.filter = e.target.value; renderSidebar() })
 $('#nav-global').addEventListener('click', () => select('global'))
+$('#nav-farm').addEventListener('click', () => select('farm'))
 $('#connect-all').addEventListener('click', () => act('bots.connectAll', {}, 'Подключаю всех…'))
 $('#disconnect-all').addEventListener('click', () => act('bots.disconnectAll', {}, 'Все отключены'))
 $('#add-bots').addEventListener('click', () => addBotsModal())
@@ -473,9 +476,94 @@ function select (id, force = false) {
   ls.set('selected', id)
   for (const [rid, row] of rows) row.classList.toggle('active', rid === id)
   $('#nav-global').classList.toggle('active', id === 'global')
+  $('#nav-farm').classList.toggle('active', id === 'farm')
   hideTip()
   if (id === 'global') renderGlobal()
+  else if (id === 'farm') renderFarm()
   else renderBot(id)
+}
+
+function updateFarmStatus () {
+  if (V?.kind !== 'farm') return
+  for (const option of [...V.bot.options]) if (!S.bots.has(option.value)) option.remove()
+  for (const b of S.bots.values()) {
+    let option = [...V.bot.options].find(o => o.value === b.id)
+    if (!option) { option = h('option', { value: b.id }); V.bot.append(option) }
+    option.textContent = botName(b)
+  }
+  const b = S.bots.get(V.bot.value)
+  V.status.textContent = b ? `${botName(b)} · ${STATE_LABEL[b.state]}${b.task ? ' · ' + b.task : ''}` : 'Добавьте бота и подключите его к серверу'
+}
+
+function renderFarm () {
+  const config = S.settings.farm || {}
+  $('#topbar').replaceChildren(h('h2', null, 'Автоферма'), h('span', { class: 'muted' }, 'Команда запуска: .autotree · остановка: .stop'))
+  const inputs = {}
+  const field = (name, label, fallback, type = 'text', min, max) => {
+    const input = h('input', { class: 'input', type, value: config[name] ?? fallback, min, max })
+    inputs[name] = input
+    return h('label', { class: 'field' }, h('span', null, label), input)
+  }
+  const toggle = (name, label, fallback) => {
+    const input = h('input', { type: 'checkbox', checked: config[name] ?? fallback })
+    inputs[name] = input
+    return h('label', { class: 'toggle-row' }, h('span', null, label), h('span', { class: 'switch' }, input, h('i')))
+  }
+  const species = h('select', { class: 'input' }, ['spruce', 'jungle', 'dark_oak', 'pale_oak'].map(s => h('option', { value: s, selected: s === (config.species || 'spruce') }, s)))
+  const botSelect = h('select', { class: 'input' }, [...S.bots.values()].map(b => h('option', { value: b.id }, botName(b))))
+  const status = h('div', { class: 'hint' })
+  botSelect.addEventListener('change', updateFarmStatus)
+  const friends = h('textarea', { class: 'input', rows: 3, placeholder: 'Ники через пробел, запятую или с новой строки' }, (S.settings.friends || []).join('\n'))
+  const save = async () => {
+    const farm = { species: species.value }
+    for (const [name, input] of Object.entries(inputs)) farm[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value.trim()
+    await act('settings.update', { patch: { farm, friends: friends.value.split(/[\s,;]+/).filter(Boolean) } }, 'Настройки автофермы сохранены')
+  }
+  const start = h('button', { class: 'btn primary', onclick: async () => {
+    start.disabled = true
+    try {
+      const b = S.bots.get(botSelect.value)
+      if (!b || b.state !== 'online') { toast('Выберите подключённого бота', true); return }
+      await save()
+      await act('bot.command', { id: b.id, line: '.autotree' }, 'Автоферма запущена; ход работы — в чате бота')
+    } catch {} finally { start.disabled = false }
+  } }, 'Сохранить и запустить')
+  const body = h('div', { class: 'farm-page stack' },
+    h('div', { class: 'sub-h' }, 'Площадка и запуск'),
+    h('p', { class: 'hint' }, 'Бот ищет отдельный квадрат из четырёх блоков земли, подзола или грязи в загруженных чанках и подходит к нему. Топор Shard Axe должен быть в инвентаре.'),
+    h('div', { class: 'farm-grid' }, h('label', { class: 'field' }, h('span', null, 'Бот'), botSelect), h('label', { class: 'field' }, h('span', null, 'Вид саженцев'), species), field('searchRadius', 'Радиус поиска площадки и контейнеров', 32, 'number', 4, 64)),
+    status,
+    h('div', { class: 'divider' }),
+    h('div', { class: 'sub-h' }, 'Пополнение из контейнеров'),
+    toggle('restock', 'Самостоятельно забирать запасы и возвращаться', true),
+    h('p', { class: 'hint' }, 'Табличка на контейнере или непосредственно рядом с ним. Метка должна занимать отдельную строку. Поддерживаются сундуки, бочки, шалкеры, воронки, раздатчики и выбрасыватели.'),
+    h('div', { class: 'farm-grid' }, field('mealLabel', 'Метка: костная мука', '1'), field('saplingLabel', 'Метка: саженцы', '3'), field('experienceLabel', 'Метка: бутылочки опыта', '2'), field('mealCount', 'Запас муки, шт.', 64, 'number', 4, 256), field('saplingCount', 'Запас саженцев, шт.', 64, 'number', 4, 256), field('experienceCount', 'Запас опыта, шт. (0 — не брать)', 16, 'number', 0, 64)),
+    h('p', { class: 'hint' }, 'Опыт только запасается. Автоматическая починка пока не включена.'),
+    h('div', { class: 'divider' }),
+    h('div', { class: 'sub-h' }, 'Автолив и друзья'),
+    toggle('autoLeave', 'Отключаться при появлении постороннего игрока', true),
+    h('p', { class: 'hint' }, 'Во время фарма и походов за запасами. Проверяется вся загруженная область. После автолива переподключения нет: следующий вход — только вручную. Ваши боты и друзья игнорируются.'),
+    h('label', { class: 'field' }, h('span', null, 'Общий список друзей для всех ботов'), friends),
+    h('p', { class: 'hint' }, '.friend add Ник · .friend remove Ник · .friend clear · .friend list. Друзей боты не атакуют.'),
+    h('div', { class: 'divider' }),
+    h('div', { class: 'sub-h' }, 'Уведомления Discord'),
+    toggle('discordEnabled', 'Уведомлять о проблемах всех ботов', false),
+    field('discordWebhook', 'Discord webhook URL', '', 'password'),
+    field('axeAlertPercent', 'Предупреждать при остатке прочности топора, %', 10, 'number', 1, 100),
+    h('p', { class: 'hint' }, 'Кик/бан, отключение и автолив, смерть, ошибки фермы, частые коррекции и низкая прочность. О расходниках — только если бот открыл контейнер и нужного предмета там нет. Флаг античита по коррекциям не подтверждается. Повтор одной проблемы — не чаще раза в 5 минут. Ссылка сохраняется локально.'),
+    h('button', { class: 'btn', onclick: async event => {
+      const button = event.currentTarget; button.disabled = true
+      try {
+        if (!botSelect.value) { toast('Добавьте и выберите бота для проверки', true); return }
+        await save()
+        await act('discord.test', { id: botSelect.value }, 'Проверочное сообщение отправлено в Discord')
+      } catch {} finally { button.disabled = false }
+    } }, 'Сохранить и проверить Discord'),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => save().catch(() => {}) }, 'Сохранить'), start, h('button', { class: 'btn', onclick: () => { if (botSelect.value) act('bot.command', { id: botSelect.value, line: '.stop' }).catch(() => {}) } }, 'Остановить'))
+  )
+  V = { kind: 'farm', bot: botSelect, status }
+  $('#view').replaceChildren(body)
+  updateFarmStatus()
 }
 
 // ---------- console component ----------

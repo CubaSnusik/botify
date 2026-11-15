@@ -1,7 +1,7 @@
 'use strict'
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const { equipDigTool } = require('../src/dig-tool')
+const { equipDigTool, equipWithRetries } = require('../src/dig-tool')
 
 function fixture () {
   const actions = []
@@ -42,4 +42,44 @@ test('an open container or carried stack is left untouched', async () => {
   bot.inventory.selectedItem = item
   await assert.rejects(equipDigTool(bot, item), /курсор/)
   assert.deepEqual(actions, [])
+})
+
+test('equipment retries refresh moved stacks and recover on the fifth retry', async () => {
+  const { bot, item } = fixture()
+  let attempts = 0; let waits = 0; let current = item
+  const retries = []
+  bot.equip = async tool => {
+    assert.equal(tool, current)
+    attempts++
+    bot.heldItem = attempts < 6 ? null : tool
+  }
+  await equipWithRetries(bot, () => current, {
+    checkCancel: () => {},
+    wait: async () => { waits++; current = { ...item, slot: 36 + waits } },
+    onRetry: (n, total) => retries.push([n, total])
+  })
+  assert.equal(attempts, 6)
+  assert.equal(waits, 5)
+  assert.deepEqual(retries, [[1, 5], [2, 5], [3, 5], [4, 5], [5, 5]])
+})
+
+test('equipment gives up after initial attempt plus five retries', async () => {
+  const { bot, item } = fixture()
+  let attempts = 0
+  bot.equip = async () => { attempts++; throw new Error('slot rejected') }
+  await assert.rejects(equipWithRetries(bot, () => item, {
+    checkCancel: () => {}, wait: async () => {}, onRetry: () => {}
+  }), /после 5 повторов.*slot rejected/)
+  assert.equal(attempts, 6)
+})
+
+test('cancelling equipment retries prevents the next inventory action', async () => {
+  const { bot, item } = fixture()
+  let cancelled = false; let attempts = 0
+  bot.equip = async () => { attempts++; throw new Error('slot rejected') }
+  await assert.rejects(equipWithRetries(bot, () => item, {
+    checkCancel: () => { if (cancelled) throw new Error('cancelled') },
+    wait: async () => { cancelled = true }, onRetry: () => {}
+  }), /cancelled/)
+  assert.equal(attempts, 1)
 })

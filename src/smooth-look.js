@@ -11,12 +11,14 @@ const EPS = 0.151 * DEG // Mineflayer rounds rotations to 0.15 degree mouse step
 // and the peak comes a little early. Every random choice is fixed once per movement.
 const minJerk = t => t * t * t * (10 + t * (-15 + 6 * t))
 
-function humanPlan (y0, p0, y1, p1, random = Math.random) {
+function humanPlan (y0, p0, y1, p1, random = Math.random, fast = false) {
   const dy = wrap(y1 - y0)
   const dp = p1 - p0
   const dist = Math.hypot(dy, dp)
   const deg = dist / DEG
-  const ticks = deg < 0.5
+  const ticks = fast
+    ? Math.max(4, Math.ceil(deg / 15), Math.round((3 + deg * 0.065 + Math.sqrt(deg) * 0.25) * (0.9 + random() * 0.2)))
+    : deg < 0.5
     ? 2
     : Math.max(4, Math.min(40, Math.round((4 + deg * 0.16 + Math.sqrt(deg) * 0.9) * (0.85 + random() * 0.35))))
   const side = random() < 0.5 ? -1 : 1
@@ -70,7 +72,7 @@ function attachSmoothLook (bot) {
     spinning = false
     if (target && target.mode === mode && Math.abs(wrap(yaw - target.yaw)) < 1e-8 && Math.abs(pitch - target.pitch) < 1e-8) return target.promise
     // A hand already moving does not restart for a small correction: it bends its end point.
-    if (mode === 'human' && target?.mode === 'human' && target.plan && target.plan.k < target.plan.ticks - 2 &&
+    if (mode.startsWith('human') && target?.mode === mode && target.plan && target.plan.k < target.plan.ticks - 2 &&
         Math.hypot(wrap(yaw - target.yaw), pitch - target.pitch) < 1 * DEG) {
       target.yaw = yaw
       target.pitch = pitch
@@ -147,8 +149,8 @@ function attachSmoothLook (bot) {
         return
       }
       if (target.cancelled()) { cancel(); return }
-      if (target.mode === 'human') {
-        if (!target.plan) target.plan = humanPlan(bot.entity.yaw, bot.entity.pitch, target.yaw, target.pitch)
+      if (target.mode === 'human' || target.mode === 'human-fast') {
+        if (!target.plan) target.plan = humanPlan(bot.entity.yaw, bot.entity.pitch, target.yaw, target.pitch, Math.random, target.mode === 'human-fast')
         const plan = target.plan
         plan.k = Math.min(plan.ticks, plan.k + 1)
         // the last step lands exactly on the target (no snap: minimum-jerk speed is ~0 there)

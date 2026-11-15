@@ -127,6 +127,12 @@ function startServer ({ port = 7878, fallback = true, app = createApp() } = {}) 
       dataDir: store.dir
     }),
     'bot.logs': ({ id }) => manager.get(id).logs,
+    'discord.test': async ({ id }) => {
+      const inst = manager.get(id)
+      if (!inst.alerts.enabled()) throw new Error('сначала включите и сохраните Discord webhook')
+      await inst.alerts.notify('test', 'Проверка уведомлений Botify', 'Вебхук работает. Уведомления настроены для всех ботов.', { force: true })
+      return true
+    },
     'bot.inventory': ({ id }) => manager.get(id).inventory(),
     'bot.connect': ({ id }) => { manager.get(id).connect() },
     'bot.disconnect': ({ id }) => manager.get(id).disconnect(),

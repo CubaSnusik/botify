@@ -17,9 +17,12 @@ const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { startFollowing } = require('./follow-navigation')
 const { chopTrees } = require('./tree-chopper')
+const { farmTrees, selectFarmPlot, chooseSpecies } = require('./tree-farm')
 const { describeDigSpeed } = require('./dig-speed')
 const { equipDigTool } = require('./dig-tool')
 const { digUntilChanged } = require('./held-dig')
+const { isFriend, friendCommand, watchFarmPlayers } = require('./friends')
+const { runAutoTreeFarm } = require('./auto-tree-farm')
 
 const REACH_BLOCK = 4.5
 const REACH_ENTITY = 3.0
@@ -180,8 +183,8 @@ async function digWithFace (bot, block, face, signal, reply) {
   if (bot.currentWindow) throw new CmdError('перед копанием закрой открытое окно')
   if (bot.inventory.selectedItem) throw new CmdError('перед копанием убери предмет с курсора инвентаря')
   if (signal) {
-    await digUntilChanged(bot, block, face, signal, retries => {
-      if (retries === 1 || retries % 10 === 0) reply?.(`сервер ещё не подтвердил разрушение ${block.name} — продолжаю удерживать копание (повтор ${retries}; .stop — остановить)`)
+    await digUntilChanged(bot, block, face, signal, (retries, error) => {
+      if (retries === 1 || retries % 10 === 0) reply?.(`[проверка] ${block.name}: ${error.message}; возможны защита, задержка или античит — флаг не подтверждён. Продолжаю копание (повтор ${retries}; .stop — остановить)`)
     })
   } else await bot.dig(block, 'ignore', face)
 }
@@ -210,7 +213,7 @@ async function holdLmb (inst, bot, signal) {
   while (alive()) {
     const ent = typeof bot.entityAtCursor === 'function' ? bot.entityAtCursor(REACH_ENTITY) : null
     const block = bot.blockAtCursor(REACH_BLOCK)
-    if (ent && (!block || eyeDist(bot, ent.position) < eyeDist(bot, block.position.offset(0.5, 0.5, 0.5)))) {
+    if (ent && !isFriend(inst, ent) && (!block || eyeDist(bot, ent.position) < eyeDist(bot, block.position.offset(0.5, 0.5, 0.5)))) {
       bot.attack(ent)
       await bot.waitForTicks(/axe/.test(bot.heldItem?.name || '') ? 20 : 12)
       continue
@@ -598,27 +601,54 @@ const COMMANDS = [
     }
   },
   {
+    name: 'autotree',
+    aliases: ['autotreefarm'],
+    task: true,
+    usage: '.autotree',
+    desc: 'автоферма: найти площадку, подойти, выращивать и пополнять запасы по табличкам',
+    async run (ctx) {
+      const bot = needOnline(ctx.inst)
+      if (ctx.args.length) throw new CmdError('usage: .autotree — настройки во вкладке «Автоферма»')
+      await runAutoTreeFarm(ctx.inst, ctx.signal, {
+        checkCancel, Cancelled, reply: ctx.reply,
+        walk: (goal, target) => pathTo(ctx.inst, goal, ctx.signal, target),
+        look: (yaw, pitch, cancelled) => bot.smoothLook
+          ? bot.smoothLook.turn(yaw, pitch, cancelled, 'human-fast')
+          : lookSmooth(bot, yaw, pitch, 24, cancelled).then(() => true),
+        dig: (block, face) => digWithFace(bot, block, face, ctx.signal, ctx.reply)
+      })
+    }
+  },
+  {
     name: 'tree',
     task: true,
     aliases: ['chop', 'trees'],
-    usage: '.tree [any] [предмет]',
-    desc: 'стоять на месте и рубить деревья shard axe (плавный прицел, ломает препятствия)',
-    task: true,
+    usage: '.tree [any] [предмет] | .tree farm [вид саженца]',
+    desc: 'рубить деревья или сажать, взращивать мукой и рубить площадку 2×2 под прицелом',
     async run (ctx) {
       const bot = needOnline(ctx.inst)
       const args = [...ctx.args]
-      const any = args[0]?.toLowerCase() === 'any'
-      if (any) args.shift()
-      await chopTrees(bot, ctx.signal, { requireNatural: !any, item: args.join(' ') }, {
+      const deps = {
         look: (yaw, pitch, cancelled) => bot.smoothLook
-          ? bot.smoothLook.turn(yaw, pitch, cancelled, 'human')
-          : lookSmooth(bot, yaw, pitch, 12, cancelled).then(() => true),
+          ? bot.smoothLook.turn(yaw, pitch, cancelled, 'human-fast')
+          : lookSmooth(bot, yaw, pitch, 24, cancelled).then(() => true),
         dig: (block, face) => digWithFace(bot, block, face, ctx.signal, ctx.reply),
         checkCancel,
         Cancelled,
         CmdError,
         reply: ctx.reply
-      })
+      }
+      if (args[0]?.toLowerCase() === 'farm') {
+        if (args.length > 2) throw new CmdError('usage: .tree farm [spruce|jungle|dark_oak|pale_oak]')
+        const plot = selectFarmPlot(bot)
+        const species = chooseSpecies(bot, plot, args[1]?.toLowerCase())
+        const stopGuard = watchFarmPlayers(ctx.inst, ctx.signal, ctx.reply)
+        try { await farmTrees(bot, ctx.signal, { plot, species }, deps) } finally { stopGuard() }
+      } else {
+        const any = args[0]?.toLowerCase() === 'any'
+        if (any) args.shift()
+        await chopTrees(bot, ctx.signal, { requireNatural: !any, item: args.join(' ') }, deps)
+      }
     }
   },
   {
@@ -869,6 +899,12 @@ const COMMANDS = [
     }
   },
   {
+    name: 'friend',
+    usage: '.friend add/remove <ник> | .friend clear/list',
+    desc: 'общий список друзей: не атаковать и игнорировать при автоливе',
+    async run (ctx) { ctx.reply(friendCommand(ctx.inst.store, ctx.args)) }
+  },
+  {
     name: 'attack',
     aliases: ['hit'],
     usage: '.attack [игрок|nearest] [удары]',
@@ -879,17 +915,19 @@ const COMMANDS = [
       const [who = 'nearest', times = '1'] = ctx.args
       let target
       if (who === 'nearest') {
-        target = bot.nearestEntity(e => e !== bot.entity && (e.type === 'hostile' || e.type === 'mob' || e.type === 'animal' || e.type === 'player') && e.position.distanceTo(bot.entity.position) < 16)
+        target = bot.nearestEntity(e => e !== bot.entity && !isFriend(ctx.inst, e) && (e.type === 'hostile' || e.type === 'mob' || e.type === 'animal' || e.type === 'player') && e.position.distanceTo(bot.entity.position) < 16)
         if (!target) throw new CmdError('рядом никого')
       } else target = findPlayerEntity(bot, who)
       const n = Math.max(1, Math.min(100, Number(times) || 1))
       for (let i = 0; i < n; i++) {
         checkCancel(ctx.signal)
         if (!target.isValid) { ctx.reply('цель пропала'); return }
+        if (isFriend(ctx.inst, target)) { ctx.reply('игрок в друзьях — атака отменена'); return }
         if (bot.entity.position.distanceTo(target.position) > REACH_ENTITY) {
           await pathTo(ctx.inst, new goals.GoalFollow(target, 1.8), ctx.signal, target.position)
         }
         await lookAtSmooth(bot, target.position.offset(0, target.height * 0.8, 0))
+        if (isFriend(ctx.inst, target)) return
         if (bot.entity.position.distanceTo(target.position) > REACH_ENTITY + 0.5) throw new CmdError('не дотягиваюсь')
         bot.attack(target)
         // vanilla attack cooldown: ~0.625s for swords, 1s for axes — be conservative

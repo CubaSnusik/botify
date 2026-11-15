@@ -116,7 +116,10 @@ function attachVanillaTick (bot, { perTick = true, smoothLook = true } = {}) {
     if (name === 'block_dig') bot.emit('botifyDigPacket', {
       status: params.status, sequence: params.sequence, location: params.location
     })
-    return rawWrite(name, params)
+    const result = rawWrite(name, params)
+    // This means handed to the transport, not acknowledged by the server.
+    if (name === 'block_place') bot.emit('botifyPlacePacket', { ...params, itemName: bot.heldItem?.name })
+    return result
   }
 
   const inPlay = () => client.state === 'play' && spawned && bot.entity
