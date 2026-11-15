@@ -12,7 +12,7 @@ const { WebSocketServer } = require('ws')
 const { Store, ROOT } = require('./store')
 const { BotManager, microsoftLogin } = require('./bots')
 const { getItemIcon, SkinService } = require('./assets')
-const { parseTokenLines, resolveSession, AuthError } = require('./auth')
+const { parseTokenLines, resolveSession, AuthError, looksLikeCookies, cookieToRefresh } = require('./auth')
 const { COMMAND_INFO, holdKey, startHold, stopHold } = require('./commands')
 
 /** "host", "host:port", "[::1]:port" → { host, port|null } */
@@ -219,7 +219,17 @@ function startServer ({ port = 7878, fallback = true, app = createApp() } = {}) 
     },
 
     'accounts.importTokens': async ({ text, clientId, server }) => {
-      const parsed = parseTokenLines(text, clientId ? String(clientId).trim() : null)
+      const cid = clientId ? String(clientId).trim() : null
+      // Microsoft login cookies: exchange the whole blob for one refresh token,
+      // then validate and save it like any other refresh account.
+      let parsed
+      if (looksLikeCookies(text)) {
+        try { parsed = [await cookieToRefresh(text, cid)] } catch (e) {
+          return [{ ok: false, error: e instanceof AuthError ? e.message : `ошибка: ${e.message}` }]
+        }
+      } else {
+        parsed = parseTokenLines(text, cid)
+      }
       const results = []
       for (const p of parsed) {
         if (p.error) { results.push({ ok: false, error: p.error, raw: String(p.raw).slice(0, 24) + '…' }); continue }
@@ -242,12 +252,13 @@ function startServer ({ port = 7878, fallback = true, app = createApp() } = {}) 
             clientId: temp.clientId || null
           }
           for (const k of Object.keys(fields)) if (fields[k] === undefined) delete fields[k]
+          const via = temp.viaCookies ? ' (по кукам)' : ''
           if (dup) {
             store.updateAccount(dup.id, fields)
-            results.push({ ok: true, name: s.profile.name, updated: true })
+            results.push({ ok: true, name: s.profile.name + via, updated: true })
           } else {
             store.addAccount({ ...fields, server: server || null })
-            results.push({ ok: true, name: s.profile.name })
+            results.push({ ok: true, name: s.profile.name + via })
           }
         } catch (e) {
           results.push({ ok: false, error: e instanceof AuthError ? e.message : `ошибка: ${e.message}` })

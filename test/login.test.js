@@ -5,7 +5,7 @@ const { EventEmitter } = require('node:events')
 const { BotManager } = require('../src/bots')
 const mineflayer = require('mineflayer')
 const { isRateLimited, authRetryDelay } = require('../src/connection-errors')
-const { makeAuthHook, resolveSession, refreshMicrosoft } = require('../src/auth')
+const { makeAuthHook, resolveSession, refreshMicrosoft, parseCookies, looksLikeCookies, cookieToRefresh } = require('../src/auth')
 
 test('rate limits recognize the old non-JSON error and honor Retry-After', () => {
   assert.equal(isRateLimited(new Error('Response is not JSON. Status code: 429')), true)
@@ -169,4 +169,53 @@ test('refresh token rate limit does not try further client IDs', async t => {
   })
   await assert.rejects(refreshMicrosoft('test-only'), err => err.status === 429 && err.retryAfter === '600')
   assert.equal(requests, 1)
+})
+
+test('cookie parsing reads a Cookie header, a Netscape jar, and detects the login cookie', () => {
+  const header = parseCookies('__Host-MSAAUTHP=abc; MSPCID=99; _abck=z')
+  assert.equal(header['__Host-MSAAUTHP'], 'abc')
+  assert.equal(header.MSPCID, '99')
+  const jar = parseCookies([
+    '# Netscape HTTP Cookie File',
+    '#HttpOnly_.login.live.com\tTRUE\t/\tTRUE\t0\t__Host-MSAAUTH\tval1',
+    '.login.live.com\tTRUE\t/\tFALSE\t0\tMSPOK\tval2'
+  ].join('\n'))
+  assert.equal(jar['__Host-MSAAUTH'], 'val1')
+  assert.equal(jar.MSPOK, 'val2')
+  assert.equal(looksLikeCookies('__Host-MSAAUTHP=abc; x=1'), true)
+  assert.equal(looksLikeCookies('.login.live.com\tTRUE\t/\tTRUE\t0\t__Host-MSAAUTH\tv'), true)
+  assert.equal(looksLikeCookies('M.C5xx_BAY.0.U.-Cg0abc'), false)
+  assert.equal(looksLikeCookies('{"refreshToken":"x"}'), false)
+})
+
+test('cookies without the login cookie are rejected before any network call', async t => {
+  let calls = 0
+  t.mock.method(global, 'fetch', async () => { calls++; return new Response('{}') })
+  await assert.rejects(cookieToRefresh('MSPCID=1; foo=bar', null), /__Host-MSAAUTH/)
+  assert.equal(calls, 0)
+})
+
+test('cookie login exchanges the authorize code for a refresh token', async t => {
+  const seen = []
+  t.mock.method(global, 'fetch', async (url, opts) => {
+    seen.push({ url: String(url), opts })
+    if (String(url).includes('oauth20_authorize.srf')) {
+      // valid cookies → 302 to the desktop redirect carrying the code
+      return new Response(null, { status: 302, headers: { location: 'https://login.live.com/oauth20_desktop.srf?code=M.CODE123' } })
+    }
+    return new Response(JSON.stringify({ access_token: 'ms-at', refresh_token: 'M.NEWREFRESH' }))
+  })
+  const out = await cookieToRefresh('__Host-MSAAUTHP=abc; MSPCID=1', null)
+  assert.deepEqual(out, { type: 'refresh', refreshToken: 'M.NEWREFRESH', clientId: '00000000402b5328', viaCookies: true })
+  // authorize sent the cookies; the code exchange used grant_type=authorization_code
+  assert.match(seen[0].opts.headers.Cookie, /__Host-MSAAUTHP=abc/)
+  assert.equal(seen[0].opts.redirect, 'manual')
+  assert.match(seen[1].opts.body, /grant_type=authorization_code/)
+  assert.match(seen[1].opts.body, /code=M.CODE123/)
+})
+
+test('cookies that still need a password (no code in the redirect) are reported clearly', async t => {
+  t.mock.method(global, 'fetch', async () =>
+    new Response('<html>sign in</html>', { status: 200 }))
+  await assert.rejects(cookieToRefresh('__Host-MSAAUTH=abc', null), /обнови куки/)
 })

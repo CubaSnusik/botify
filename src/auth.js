@@ -10,7 +10,12 @@
  *                The refreshed Minecraft token is cached in the account, the rotated
  *                refresh token is written back so the account stays alive.
  *
- * Tokens only ever go to Microsoft / Xbox / Mojang endpoints.
+ * Cookie import: Microsoft login.live.com cookies (a Netscape jar, a pasted
+ * "name=value; …" Cookie header, or a Localts `M.C…` line) are exchanged for a
+ * refresh token at import time (cookie → authorize code → refresh token) and
+ * then stored as a normal `refresh` account. The raw cookies are never saved.
+ *
+ * Tokens and cookies only ever go to Microsoft / Xbox / Mojang endpoints.
  */
 const crypto = require('crypto')
 const { isRateLimited } = require('./connection-errors')
@@ -152,6 +157,65 @@ async function refreshMicrosoft (refreshToken, clientId) {
   }
   const hint = clientId ? '' : ' (не подошёл ни один стандартный client_id — укажи свой)'
   throw new AuthError(`Refresh token не принят: ${lastErr?.message}${hint}`)
+}
+
+// ---------- Microsoft login cookies → refresh token ----------
+// Accepts a Netscape cookie jar (tab-separated), a pasted "name=value; …" Cookie
+// header, or a mix across lines. Returns { name: value }.
+function parseCookies (text) {
+  const jar = {}
+  for (let line of String(text).split(/\r?\n/)) {
+    line = line.trim()
+    if (!line) continue
+    if (/\t/.test(line)) { // Netscape: domain flag path secure expiry name value
+      const cols = line.replace(/^#HttpOnly_/i, '').split('\t')
+      if (cols.length >= 7 && cols[5]) jar[cols[5].trim()] = cols.slice(6).join('\t').trim()
+      continue
+    }
+    if (line.startsWith('#')) continue
+    for (const pair of line.split(';')) {
+      const i = pair.indexOf('=')
+      if (i > 0) { const k = pair.slice(0, i).trim(); if (k) jar[k] = pair.slice(i + 1).trim() }
+    }
+  }
+  return jar
+}
+
+// The __Host-MSAAUTH(P) cookie is what actually carries the login; its presence
+// is how we tell a cookie blob apart from a bare token or JSON line.
+function looksLikeCookies (text) {
+  return /__Host-MSAAUTHP?\s*[=\t]/.test(text) || /\t[^\t\n]*\.login\.live\.com/i.test(text)
+}
+
+// Cookie login is the Minecraft launcher flow on login.live.com; a custom Azure
+// (GUID) client id does not apply here, so fall back to the launcher id.
+async function cookieToRefresh (text, clientId) {
+  const jar = parseCookies(text)
+  if (!jar['__Host-MSAAUTHP'] && !jar['__Host-MSAAUTH']) {
+    throw new AuthError('В куках нет __Host-MSAAUTH(P) — экспортируй куки login.live.com заново')
+  }
+  const azure = clientId && /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(clientId)
+  const id = clientId && !azure ? clientId : LIVE_CLIENT_IDS[0]
+  const redirect = 'https://login.live.com/oauth20_desktop.srf'
+  const scope = 'service::user.auth.xboxlive.com::MBI_SSL'
+  const header = Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ')
+  const url = 'https://login.live.com/oauth20_authorize.srf?' +
+    new URLSearchParams({ client_id: id, response_type: 'code', scope, redirect_uri: redirect }).toString()
+  let res
+  try {
+    res = await fetch(url, { method: 'GET', redirect: 'manual', headers: { 'User-Agent': UA, Cookie: header } })
+  } catch (e) {
+    throw new AuthError(`Сеть: login.live.com недоступен (${e.cause?.code || e.message})`)
+  }
+  let code = null
+  try { code = new URL(res.headers.get('location') || '', 'https://login.live.com').searchParams.get('code') } catch {}
+  if (!code) throw new AuthError('Microsoft не принял куки без входа (нужен пароль/2FA) — обнови куки')
+  const r = await http('https://login.live.com/oauth20_token.srf', {
+    method: 'POST',
+    form: { client_id: id, grant_type: 'authorization_code', code, redirect_uri: redirect, scope }
+  })
+  if (!r.refresh_token) throw new AuthError('login.live.com не вернул refresh token')
+  return { type: 'refresh', refreshToken: r.refresh_token, clientId: id, viaCookies: true }
 }
 
 async function xboxToMinecraft (msAccessToken, azure) {
@@ -300,5 +364,8 @@ module.exports = {
   xboxToMinecraft,
   resolveSession,
   makeAuthHook,
-  parseTokenLines
+  parseTokenLines,
+  parseCookies,
+  looksLikeCookies,
+  cookieToRefresh
 }

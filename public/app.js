@@ -1653,12 +1653,12 @@ function addBotsModal () {
   msaIdle()
 
   // tokens
-  const tokens = h('textarea', { class: 'input', rows: 7, placeholder: 'eyJhbGciOi...            ← access token (JWT)\nM.C5xx_BAY.0.U.-Cg...     ← refresh token\nM.C5xx...|client_id       ← refresh token + свой client id\n{"accessToken":"...","refreshToken":"..."}' })
+  const tokens = h('textarea', { class: 'input', rows: 7, placeholder: 'eyJhbGciOi...            ← access token (JWT)\nM.C5xx_BAY.0.U.-Cg...     ← refresh token\nM.C5xx...|client_id       ← refresh token + свой client id\n{"accessToken":"...","refreshToken":"..."}\n__Host-MSAAUTHP=...; ...  ← куки login.live.com (весь блок)' })
   const clientId = h('input', { class: 'input', placeholder: 'необязательно — по умолчанию перебираются стандартные' })
   const results = h('div', { class: 'result-list' })
   const tokenTab = h('div', { class: 'stack' },
-    h('div', { class: 'field' }, h('span', null, 'Токены, по одному на строку'), tokens,
-      h('div', { class: 'hint' }, 'Тип определяется сам. Access token живёт ~24 ч, refresh token обновляется автоматически (новый refresh сохраняется обратно). Перед сохранением каждый токен проверяется у Mojang. Хранится всё в data/accounts.json.')),
+    h('div', { class: 'field' }, h('span', null, 'Токены / куки'), tokens,
+      h('div', { class: 'hint' }, 'Тип определяется сам: по строке на токен, либо вставь целиком куки login.live.com (заголовок Cookie или Netscape-файл — нужен __Host-MSAAUTH(P)). Куки меняются на refresh token при импорте и сами не сохраняются. Access token живёт ~24 ч, refresh обновляется автоматически. Всё проверяется у Mojang и хранится в data/accounts.json.')),
     h('div', { class: 'field' }, h('span', null, 'Client ID для refresh-токенов'), clientId),
     results)
 
