@@ -10,6 +10,11 @@
   --r: 12px;
   --r-lg: 16px;
 
+  /* nested corners: inner radius = outer radius − (border + padding).
+     A container sets --r-out / --pad (and --bw if its border isn't 1px);
+     a child sitting in its corner uses var(--r-in). */
+  --bw: 1px;
+
   --side-w: 276px;
   --top-h: 44px;
   --ease: cubic-bezier(.2, .7, .2, 1);
@@ -62,6 +67,7 @@
 }
 
 * { box-sizing: border-box; }
+.seg, .suggest, .menu, .prompt, .tp-dock, .nav-item { --r-in: max(2px, calc(var(--r-out) - var(--bw) - var(--pad))); }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg);
@@ -118,7 +124,14 @@ kbd { font: 10.5px var(--font); color: var(--fg-3); border: 1px solid var(--line
 .nav-item:hover { background: var(--hover); }
 .nav-item.active { background: var(--sel); color: var(--fg); }
 .nav-item span:first-of-type { flex: 1; }
-.badge { min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--line-2); color: var(--fg); font-size: 11px; font-weight: 600; display: inline-grid; place-items: center; }
+/* nav item is the container (radius 8, no border); its badge sits 5px from the top, bottom and right edges */
+.nav-item { --r-out: var(--r-sm); --bw: 0px; --pad: 5px; }
+.nav-item:has(.badge) { padding-right: var(--pad); }
+.badge {
+  min-width: 24px; height: calc(34px - 2 * var(--pad)); padding: 0 7px; border-radius: var(--r-in);
+  background: var(--line-2); color: var(--fg); font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  display: inline-grid; place-items: center;
+}
 
 .section-head {
   display: flex; align-items: center; gap: 6px; padding: 14px 12px 6px 18px;
@@ -175,16 +188,18 @@ kbd { font: 10.5px var(--font); color: var(--fg-3); border: 1px solid var(--line
 .bot-row .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .bot-row .name { font-weight: 560; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bot-row .sub { font-size: 11.5px; color: var(--fg-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* same size / radius as .icon-btn.sm, with a resting fill so it reads as a control */
 .bot-row .power {
-  width: 26px; height: 26px; border-radius: 7px; border: 0; background: var(--hover); color: var(--fg-3);
+  width: var(--btn-h-sm); height: var(--btn-h-sm); border-radius: var(--btn-r-sm); border: 0; background: var(--hover); color: var(--fg-3);
   display: grid; place-items: center; cursor: pointer; flex: none;
-  transition: background .15s, color .15s;
+  transition: background .12s, color .12s, transform .06s;
 }
 .bot-row .power:hover { background: var(--line-2); color: var(--fg-2); }
+.bot-row .power:active { transform: scale(.97); }
 .bot-row.s-online .power { color: var(--fg); }
 .bot-row.s-online .power:hover { color: var(--fg); background: var(--line-2); }
 .bot-row .power:disabled { opacity: .4; cursor: default; }
-.bot-row .power svg { width: 14px; height: 14px; }
+.bot-row .power svg { width: 13px; height: 13px; }
 .empty-list { padding: 22px 14px; color: var(--fg-3); text-align: center; line-height: 1.6; }
 
 .side-bottom { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
@@ -228,32 +243,32 @@ kbd { font: 10.5px var(--font); color: var(--fg-3); border: 1px solid var(--line
 .farm-page .row { flex-wrap: wrap; }
 
 /* ---------- buttons / inputs ---------- */
-.btn {
-  height: 32px; padding: 0 13px; border-radius: var(--r-sm); border: 1px solid var(--line-2);
-  background: var(--card-2); color: var(--fg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
-  font-weight: 540; white-space: nowrap; transition: background .12s, transform .06s, opacity .12s;
+/* one button system: two sizes (32 / 26), same radius, border, states and icon sizing.
+   .btn — text (+ icon), .icon-btn — square icon only; .ghost / .sm modifiers for both. */
+:root { --btn-h: 32px; --btn-h-sm: 26px; --btn-r: var(--r-sm); --btn-r-sm: 7px; }
+.btn, .icon-btn {
+  height: var(--btn-h); border-radius: var(--btn-r); border: 1px solid var(--line-2);
+  background: var(--card-2); color: var(--fg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 540; white-space: nowrap; text-decoration: none; flex: none;
+  transition: background .12s, color .12s, border-color .12s, transform .06s, opacity .12s;
 }
-.btn:hover { background: var(--sel); }
-.btn:active { transform: scale(.98); }
-.btn:disabled { opacity: .45; pointer-events: none; }
+.btn { padding: 0 13px; gap: 7px; }
+.icon-btn { width: var(--btn-h); padding: 0; color: var(--fg-2); }
+.btn:hover, .icon-btn:hover { background: var(--sel); color: var(--fg); }
+.btn:active, .icon-btn:active { transform: scale(.97); }
+.btn:disabled, .icon-btn:disabled { opacity: .45; pointer-events: none; }
+.btn:focus-visible, .icon-btn:focus-visible { outline: 2px solid var(--fg-3); outline-offset: 2px; }
 .btn.primary { background: var(--fg); color: var(--inv); border-color: var(--fg); }
 .btn.primary:hover { opacity: .88; }
-.btn.ghost { background: none; border-color: transparent; color: var(--fg-2); }
-.btn.ghost:hover { background: var(--hover); color: var(--fg); }
+.btn.ghost, .icon-btn.ghost, .icon-btn.sm { background: none; border-color: transparent; color: var(--fg-2); }
+.btn.ghost:hover, .icon-btn.ghost:hover, .icon-btn.sm:hover { background: var(--hover); color: var(--fg); }
 .btn.danger { border-color: var(--fg); }
-.btn.sm { height: 26px; padding: 0 9px; font-size: 12px; border-radius: 7px; }
+.btn.sm, .icon-btn.sm { height: var(--btn-h-sm); border-radius: var(--btn-r-sm); font-size: 12px; }
+.btn.sm { padding: 0 9px; gap: 6px; }
+.icon-btn.sm { width: var(--btn-h-sm); }
 .btn.grow { flex: 1; }
-.btn svg { width: 15px; height: 15px; }
-
-.icon-btn {
-  width: 32px; height: 32px; border-radius: var(--r-sm); border: 1px solid var(--line-2); background: var(--card-2);
-  display: grid; place-items: center; cursor: pointer; color: var(--fg-2); flex: none;
-}
-.icon-btn:hover { color: var(--fg); background: var(--sel); }
-.icon-btn.sm { width: 24px; height: 24px; border: 0; background: none; border-radius: 6px; }
-.icon-btn.sm:hover { background: var(--hover); }
-.icon-btn.sm svg { width: 13px; height: 13px; }
-.icon-btn svg[fill-icon], .icon-btn.sm svg path[d^="M7 5"] { fill: currentColor; }
+.btn svg, .icon-btn svg { width: 15px; height: 15px; }
+.btn.sm svg, .icon-btn.sm svg { width: 13px; height: 13px; }
 
 .input, select.input, textarea.input {
   height: 32px; width: 100%; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line);
@@ -274,8 +289,8 @@ select.input { appearance: none; padding-right: 28px; cursor: pointer;
 .stack { display: flex; flex-direction: column; gap: 14px; }
 
 /* segmented control */
-.seg { display: inline-flex; padding: 3px; background: var(--input); border-radius: 10px; gap: 2px; border: 1px solid var(--line); }
-.seg button { height: 28px; padding: 0 14px; border: 0; border-radius: 7px; background: none; cursor: pointer; color: var(--fg-2); font-weight: 540; }
+.seg { --r-out: 10px; --pad: 3px; display: inline-flex; padding: var(--pad); background: var(--input); border-radius: var(--r-out); gap: 2px; border: 1px solid var(--line); }
+.seg button { height: 28px; padding: 0 14px; border: 0; border-radius: var(--r-in); background: none; cursor: pointer; color: var(--fg-2); font-weight: 540; }
 .seg button:hover { color: var(--fg); }
 .seg button.on { background: var(--card); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, .25), 0 0 0 1px var(--line); }
 .seg.full { display: flex; } .seg.full button { flex: 1; }
@@ -322,20 +337,24 @@ select.input { appearance: none; padding-right: 28px; cursor: pointer;
 .ln.k-chat .tx { color: var(--fg); }
 .log-empty { color: var(--fg-3); padding: 18px 0; font-family: var(--font); }
 
-.prompt { position: relative; padding: 10px; border-top: 1px solid var(--line); }
+/* the prompt sits in the bottom corners of the console card */
+.prompt { --r-out: var(--r-lg); --pad: 10px; position: relative; padding: var(--pad); border-top: 1px solid var(--line); }
 .prompt .box {
   display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 6px 0 12px;
-  border-radius: 10px; background: var(--input); border: 1px solid var(--line);
+  border-radius: var(--r-in); background: var(--input); border: 1px solid var(--line);
 }
 .prompt .box:focus-within { border-color: var(--fg-3); }
+/* send button: 6px from the box's right edge → box radius − border − 6px (floored) */
+.prompt .box .icon-btn { border-radius: max(2px, calc(var(--r-in) - var(--bw) - 6px)); }
 .prompt .caret { color: var(--fg-3); font: 600 13px var(--mono); }
 .prompt input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; font: 13px var(--mono); user-select: text; }
 .prompt input::placeholder { color: var(--fg-3); font-family: var(--font); }
 .suggest {
   position: absolute; left: 10px; right: 10px; bottom: 54px; background: var(--elev); border: 1px solid var(--line-2);
-  border-radius: var(--r); box-shadow: var(--shadow); padding: 5px; z-index: 5; max-height: 260px; overflow-y: auto;
+  --r-out: var(--r); --pad: 5px;
+  border-radius: var(--r-out); box-shadow: var(--shadow); padding: var(--pad); z-index: 5; max-height: 260px; overflow-y: auto;
 }
-.suggest .it { display: flex; gap: 12px; padding: 6px 9px; border-radius: 7px; cursor: pointer; align-items: baseline; }
+.suggest .it { display: flex; gap: 12px; padding: 6px 9px; border-radius: var(--r-in); cursor: pointer; align-items: baseline; }
 .suggest .it.on, .suggest .it:hover { background: var(--sel); }
 .suggest .it code { font: 12px var(--mono); color: var(--fg); white-space: nowrap; }
 .suggest .it span { color: var(--fg-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -440,9 +459,12 @@ select.input { appearance: none; padding-right: 28px; cursor: pointer;
 .tp-dock {
   position: absolute; z-index: 60; top: calc(var(--top-h) + 14px); left: 50%;
   width: var(--tp-w, 420px); transform: translateX(-50%);
-  background: var(--elev); border: 1px solid var(--fg-4); border-radius: 20px; overflow: hidden;
+  --r-out: 20px; --pad: 14px;
+  background: var(--elev); border: 1px solid var(--fg-4); border-radius: var(--r-out); overflow: hidden;
   box-shadow: 0 0 0 1px var(--line), 0 18px 50px rgba(0, 0, 0, .5);
 }
+/* buttons in the dock's corners (close at top-right, answers along the bottom) */
+.tp-dock .card-head .btn, .tp-dock .dlg-buttons .btn { border-radius: var(--r-in); }
 [data-theme="dark"] .tp-dock, :root:not([data-theme]) .tp-dock { background: #050506; }
 .tp-inner { width: var(--tp-w, 420px); }
 .tp-dock .card-head { gap: 8px; }
@@ -490,7 +512,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .page.global .rot-inputs .btn { grid-column: 1 / -1; }
 .rot-now.hint { font-family: var(--font); font-size: 11.5px; color: var(--fg-3); }
 .presets { display: flex; flex-wrap: wrap; gap: 4px; }
-.presets .btn { height: 24px; padding: 0 8px; font-size: 11.5px; border-radius: 6px; }
+.presets .btn { padding: 0 8px; }
 
 /* inventory drag & drop */
 .slot[draggable=true] { cursor: grab; }
@@ -508,7 +530,7 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .menu .hb-row button { width: 22px; height: 22px; padding: 0; justify-content: center; border-radius: 5px; background: var(--slot); font: 600 11px var(--mono); }
 .menu .hb-row button:hover { background: var(--fg); color: var(--inv); }
 .slot-nums { display: flex; gap: 4px; flex-wrap: wrap; }
-.slot-nums .btn { width: 28px; padding: 0; justify-content: center; font-family: var(--mono); }
+.slot-nums .btn { width: var(--btn-h-sm); padding: 0; font-family: var(--mono); }
 
 /* global targets */
 .targets { padding: 0 8px 8px; }
@@ -558,12 +580,13 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px;
 .code-box .code { font: 600 30px var(--mono); letter-spacing: .16em; user-select: text; }
 
 .menu {
-  position: fixed; z-index: 60; min-width: 190px; padding: 5px; border-radius: var(--r); background: var(--elev);
+  --r-out: var(--r); --pad: 5px;
+  position: fixed; z-index: 60; min-width: 190px; padding: var(--pad); border-radius: var(--r-out); background: var(--elev);
   border: 1px solid var(--line-2); box-shadow: var(--shadow); animation: pop .12s var(--ease);
 }
 .menu button {
   width: 100%; display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 9px; border: 0; background: none;
-  border-radius: 7px; cursor: pointer; text-align: left; color: var(--fg);
+  border-radius: var(--r-in); cursor: pointer; text-align: left; color: var(--fg);
 }
 .menu button:hover { background: var(--sel); }
 .menu button svg { width: 14px; height: 14px; color: var(--fg-2); }

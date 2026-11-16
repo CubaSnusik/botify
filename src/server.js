@@ -134,6 +134,15 @@ function startServer ({ port = 7878, fallback = true, app = createApp() } = {}) 
       return true
     },
     'bot.inventory': ({ id }) => manager.get(id).inventory(),
+    // Nicks for console autocompletion: tab list of one bot, or of every online bot.
+    'players.list': ({ id }) => {
+      const names = new Set()
+      for (const b of manager.bots.values()) {
+        if (id && b.id !== id) continue
+        if (b.state === 'online' && b.bot) for (const n of Object.keys(b.bot.players || {})) names.add(n)
+      }
+      return [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    },
     'bot.connect': ({ id }) => { manager.get(id).connect() },
     'bot.disconnect': ({ id }) => manager.get(id).disconnect(),
     'bot.command': ({ id, line }) => {

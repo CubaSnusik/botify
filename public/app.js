@@ -28,7 +28,7 @@ function h (tag, attrs, ...kids) {
 
 const SVG = {
   play: '<svg viewBox="0 0 24 24"><path d="M7 5v14l11-7z" fill="currentColor"/></svg>',
-  stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  stop: '<svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>',
   power: '<svg viewBox="0 0 24 24"><path d="M12 3v8"/><path d="M6.3 7.3a8 8 0 1 0 11.4 0"/></svg>',
   more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/></svg>',
   trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
@@ -592,7 +592,7 @@ function renderFarm () {
         await act('discord.test', { id: botSelect.value }, 'Проверочное сообщение отправлено в Discord')
       } catch {} finally { button.disabled = false }
     } }, 'Сохранить и проверить Discord'),
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => save().catch(() => {}) }, 'Сохранить'), start, h('button', { class: 'btn', onclick: () => { if (botSelect.value) act('bot.command', { id: botSelect.value, line: '.stop' }).catch(() => {}) } }, 'Остановить'))
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => save().catch(() => {}) }, 'Сохранить'), start, h('button', { class: 'btn', onclick: () => { if (botSelect.value) act('bot.command', { id: botSelect.value, line: '.stop' }).catch(() => {}) } }, icon('stop'), 'Остановить'))
   )
   V = { kind: 'farm', bot: botSelect, status }
   $('#view').replaceChildren(body)
@@ -600,7 +600,33 @@ function renderFarm () {
 }
 
 // ---------- console component ----------
-function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
+// Candidates for a command's argument #i (args are the words typed so far, lower-case).
+// PLAYERS expands to nicks from the tab list.
+const PLAYERS = Symbol('players')
+const HOLD_KEYS = ['lmb', 'rmb', 'w', 'a', 's', 'd', 'jump', 'sneak', 'sprint']
+const ORBIT = (i) => i === 0 ? [PLAYERS] : ['spin', 'speed=']
+const ARG_HINTS = {
+  help: (i) => i === 0 ? S.commands.map(c => c.name) : null,
+  goto: (i) => i === 0 ? [PLAYERS] : null,
+  follow: ORBIT,
+  circle: ORBIT,
+  transfer: (i, a) => i === 1 ? [PLAYERS] : i === 2 ? ['chests'] : i >= 3 && a[2] === 'chests' ? ['reset'] : null,
+  tree: (i, a) => i === 0 ? ['any', 'farm'] : i === 1 && a[0] === 'farm' ? ['spruce', 'jungle', 'dark_oak', 'pale_oak'] : null,
+  slot: (i) => i === 0 ? ['1', '2', '3', '4', '5', '6', '7', '8', '9'] : null,
+  hold: (i) => i === 0 ? HOLD_KEYS : null,
+  release: (i) => i === 0 ? [...HOLD_KEYS, 'all'] : null,
+  gui: (i, a) => i === 0 ? ['click', 'close'] : i === 2 && a[0] === 'click' ? ['right', 'shift'] : null,
+  dialog: (i) => i === 0 ? ['set', 'close'] : null,
+  equip: (i) => i === 1 ? ['hand', 'off-hand', 'head', 'torso', 'legs', 'feet'] : null,
+  drop: (i) => i === 0 ? ['all'] : null,
+  use: (i) => i === 0 ? ['stop'] : null,
+  lookat: (i) => i === 0 ? [PLAYERS] : null,
+  friend: (i, a) => i === 0 ? ['add', 'remove', 'clear', 'list'] : i === 1 && (a[0] === 'add' || a[0] === 'remove') ? [PLAYERS] : null,
+  attack: (i) => i === 0 ? ['nearest', PLAYERS] : null,
+  sneak: (i) => i === 0 ? ['on', 'off'] : null
+}
+
+function createConsole ({ placeholder, onSubmit, historyKey, global = false, botId = null }) {
   const log = h('div', { class: 'log' })
   const input = h('input', { placeholder, spellcheck: 'false', autocomplete: 'off' })
   const suggest = h('div', { class: 'suggest hidden' })
@@ -641,49 +667,102 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
   function setError (msg) {
     box.classList.toggle('bad', !!msg)
   }
+  // Nicks of players on the server (tab list), fetched on demand and cached briefly.
+  let players = []; let playersAt = 0; let playersReq = null
+  function needPlayers () {
+    if (playersReq || Date.now() - playersAt < 4000) return
+    playersReq = api.call('players.list', { id: botId })
+      .then((list) => { players = list || [] })
+      .catch(() => {})
+      .finally(() => {
+        playersReq = null; playersAt = Date.now()
+        if (document.activeElement === input) updateSuggest()
+      })
+  }
+  const nickItems = (token, base) => {
+    needPlayers()
+    const t = token.toLowerCase()
+    return players.filter(n => n.toLowerCase().startsWith(t) && n !== token).slice(0, 100)
+      .map(n => ({ code: n, desc: 'игрок', value: base + n + ' ' }))
+  }
+
+  // Items are { code, desc, value }: picking one replaces the whole input with `value`.
   function updateSuggest () {
     const v = input.value
     const typed = v.match(/^(@\S+\s+)?\.(\S*)(\s.*)?$/)
-    if (!typed) { suggest.classList.add('hidden'); sItems = []; setError(null); return }
+    if (!typed) { setError(null); return showItems(plainItems(v)) }
+    const prefix = typed[1] || ''
     const q = typed[2].toLowerCase()
-    // Arguments being typed: show the usage with the current argument lit.
+    // Arguments being typed: usage with the current argument lit + candidates for it.
     if (typed[3] !== undefined) {
-      sItems = []
       const c = findCommand(q)
-      if (!c) { setError(true); showNote(h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд'); return }
+      if (!c) { setError(true); return showItems([], h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд') }
       const args = typed[3].trim() ? typed[3].trim().split(/\s+/) : []
       const cur = /\s$/.test(typed[3]) ? args.length : args.length - 1
+      const token = /\s$/.test(typed[3]) ? '' : args[args.length - 1]
       const spec = usageSpec(c.usage)
       const extra = spec && args.length > spec.max
       setError(extra)
-      showNote(spec ? usageView(c, spec, cur) : h('code', null, c.usage),
+      const base = v.slice(0, v.length - token.length)
+      return showItems(extra ? [] : argItems(c.name, cur, args, token, base),
+        spec ? usageView(c, spec, cur) : h('code', null, c.usage),
         extra ? h('span', { class: 'err' }, `лишние аргументы — максимум ${spec.max}`) : c.desc)
-      return
     }
-    sItems = S.commands.filter(c => c.name.startsWith(q) || c.aliases.some(a => a.startsWith(q))).slice(0, 8)
-    if (!sItems.length) {
-      setError(!!q)
-      if (q) showNote(h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд')
-      else suggest.classList.add('hidden')
-      return
-    }
+    // every registered command is listed (the box scrolls); name matches go before alias-only ones
+    const byName = S.commands.filter(c => c.name.startsWith(q))
+    const byAlias = S.commands.filter(c => !c.name.startsWith(q) && c.aliases.some(a => a.startsWith(q)))
+    const items = [...byName, ...byAlias].map(c => ({ code: c.usage, desc: c.desc, value: `${prefix}.${c.name} `, name: c.name }))
+    if (!items.length && q) { setError(true); return showItems([], h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд') }
     setError(null)
-    sIdx = Math.min(sIdx, sItems.length - 1)
-    suggest.replaceChildren(...sItems.map((c, i) => h('div', {
+    showItems(items)
+  }
+
+  // Outside of a .command: "@Nick1,Ni" → our bots (global console), last word → player nicks.
+  function plainItems (v) {
+    const at = global && v.match(/^@((?:[^\s,]+,)*)([^\s,]*)$/)
+    if (at) {
+      const t = at[2].toLowerCase()
+      const chosen = new Set(at[1].toLowerCase().split(',').filter(Boolean))
+      return [...S.bots.values()].map(b => b.username).filter(n => n && !chosen.has(n.toLowerCase()) && n.toLowerCase().startsWith(t))
+        .map(n => ({ code: '@' + at[1] + n, desc: 'бот', value: `@${at[1]}${n} ` }))
+    }
+    const word = v.match(/(\S{2,})$/)
+    if (!word || word[1].startsWith('@')) return []
+    return nickItems(word[1], v.slice(0, v.length - word[1].length))
+  }
+
+  function argItems (cmd, i, args, token, base) {
+    const fn = ARG_HINTS[cmd]
+    const list = fn ? fn(i, args.map(a => a.toLowerCase())) : null
+    if (!list) return []
+    const t = token.toLowerCase()
+    const items = []
+    for (const x of list) {
+      if (x === PLAYERS) { items.push(...nickItems(token, base)); continue }
+      if (x.toLowerCase().startsWith(t) && x !== token && !args.slice(0, i).includes(x)) {
+        items.push({ code: x, desc: '', value: base + x + (x.endsWith('=') ? '' : ' ') })
+      }
+    }
+    return items
+  }
+
+  function showItems (items, noteMain, noteSub) {
+    sItems = items
+    if (!items.length && !noteMain) { suggest.classList.add('hidden'); return }
+    sIdx = Math.min(sIdx, Math.max(0, items.length - 1))
+    const rows = items.map((it, i) => h('div', {
       class: 'it' + (i === sIdx ? ' on' : ''),
-      onpointerdown: (e) => { e.preventDefault(); complete(c) }
-    }, h('code', null, c.usage), h('span', null, c.desc))))
+      onpointerdown: (e) => { e.preventDefault(); complete(it) }
+    }, h('code', null, it.code), it.desc ? h('span', null, it.desc) : null))
+    suggest.replaceChildren(...(noteMain ? [h('div', { class: 'it note' }, noteMain, noteSub ? h('span', null, noteSub) : null)] : []), ...rows)
     suggest.classList.remove('hidden')
+    rows[sIdx]?.scrollIntoView({ block: 'nearest' })
   }
-  function showNote (main, sub) {
-    suggest.replaceChildren(h('div', { class: 'it note' }, main, sub ? h('span', null, sub) : null))
-    suggest.classList.remove('hidden')
-  }
-  function complete (c) {
-    const prefix = (input.value.match(/^(@\S+\s+)/) || ['', ''])[1]
-    input.value = `${prefix}.${c.name} `
-    suggest.classList.add('hidden')
+  function complete (it) {
+    input.value = it.value
+    sIdx = 0
     input.focus()
+    updateSuggest() // show what the next argument can be
   }
 
   input.addEventListener('input', () => { sIdx = 0; updateSuggest() })
@@ -698,7 +777,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false }) {
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault()
-      if (sOpen && !input.value.includes(' ')) {
+      if (sOpen) {
         sIdx = (sIdx + (e.key === 'ArrowUp' ? -1 : 1) + sItems.length) % sItems.length
         updateSuggest()
         return
@@ -835,15 +914,15 @@ function createRotation ({ onLook, onTurn, live = true }) {
       h('div', { class: 'rot-inputs' }, yawIn, pitchIn, h('button', { class: 'btn sm primary', onclick: apply }, 'Повернуть')),
       h('div', { class: 'pitch' }, h('span', null, 'вверх'), range, h('span', null, 'вниз')),
       h('div', { class: 'presets' },
-        h('button', { class: 'btn', onclick: set(180, null) }, 'С'),
-        h('button', { class: 'btn', onclick: set(-90, null) }, 'В'),
-        h('button', { class: 'btn', onclick: set(0, null) }, 'Ю'),
-        h('button', { class: 'btn', onclick: set(90, null) }, 'З'),
-        h('button', { class: 'btn', onclick: turn(-45), title: 'Повернуться влево на 45°' }, '−45°'),
-        h('button', { class: 'btn', onclick: turn(45), title: 'Повернуться вправо на 45°' }, '+45°'),
-        h('button', { class: 'btn', onclick: set(null, -90) }, 'Вверх'),
-        h('button', { class: 'btn', onclick: set(null, 0) }, 'Прямо'),
-        h('button', { class: 'btn', onclick: set(null, 90) }, 'Вниз'))))
+        h('button', { class: 'btn sm', onclick: set(180, null) }, 'С'),
+        h('button', { class: 'btn sm', onclick: set(-90, null) }, 'В'),
+        h('button', { class: 'btn sm', onclick: set(0, null) }, 'Ю'),
+        h('button', { class: 'btn sm', onclick: set(90, null) }, 'З'),
+        h('button', { class: 'btn sm', onclick: turn(-45), title: 'Повернуться влево на 45°' }, '−45°'),
+        h('button', { class: 'btn sm', onclick: turn(45), title: 'Повернуться вправо на 45°' }, '+45°'),
+        h('button', { class: 'btn sm', onclick: set(null, -90) }, 'Вверх'),
+        h('button', { class: 'btn sm', onclick: set(null, 0) }, 'Прямо'),
+        h('button', { class: 'btn sm', onclick: set(null, 90) }, 'Вниз'))))
   paint()
 
   return {
@@ -890,6 +969,7 @@ function renderBot (id) {
   const con = createConsole({
     placeholder: 'Сообщение в чат или .команда  ·  Tab — дополнить, стрелки — история',
     historyKey: 'bot',
+    botId: id,
     onSubmit: (line) => act('bot.command', { id, line }).catch(() => {})
   })
   const consoleCard = h('div', { class: 'card console' },
@@ -915,7 +995,7 @@ function renderBot (id) {
     h('div', { class: 'card-head' }, h('h3', null, 'Действия'), h('div', { class: 'spacer' }), h('span', { class: 'task-chip', id: 'task-chip' })),
     h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, 'Идти')),
     h('div', { class: 'quick' },
-      h('button', { class: 'btn sm', onclick: cmd('.stop') }, 'Стоп'),
+      h('button', { class: 'btn sm', onclick: cmd('.stop') }, icon('stop'), 'Стоп'),
       h('button', { class: 'btn sm', onclick: cmd('.jump') }, 'Прыжок'),
       h('button', { class: 'btn sm', onclick: cmd('.sneak') }, 'Присесть'),
       h('button', { class: 'btn sm', onclick: cmd('.break') }, 'Сломать блок'),
@@ -1477,7 +1557,7 @@ function renderGlobal () {
     h('div', { class: 'card-head' }, h('h3', null, 'Всем сразу')),
     h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, 'Идти')),
     h('div', { class: 'quick' },
-      h('button', { class: 'btn sm', onclick: () => send('.stop') }, 'Стоп'),
+      h('button', { class: 'btn sm', onclick: () => send('.stop') }, icon('stop'), 'Стоп'),
       h('button', { class: 'btn sm', onclick: () => send('.jump') }, 'Прыжок'),
       h('button', { class: 'btn sm', onclick: () => send('.sneak') }, 'Присесть'),
       h('button', { class: 'btn sm', onclick: () => send('.break') }, 'Сломать'),
