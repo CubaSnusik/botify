@@ -4,7 +4,8 @@ const CONTROL_KEYS = ['forward', 'back', 'left', 'right', 'jump', 'sneak', 'spri
 const SPRINT_IDS = new Set(['minecraft:sprinting', 'sprinting', '662a6b8d-da3e-4c1c-8813-96ea6097278d'])
 const COLLISION_APPLY = Symbol('botifyCollisionApply')
 const walking = require('./vanilla-walking')
-const WALK_STATE = ['botifySupport', 'botifyOnGroundNoBlocks', 'botifyFallDistance']
+const WALK_STATE = ['botifySupport', 'botifyOnGroundNoBlocks', 'botifyFallDistance', 'botifyStuck',
+  'botifyEyeInWater', 'botifyWaterHeight', 'botifyLavaHeight']
 
 function itemUse (bot) {
   if (!bot.usingHeldItem || bot.vehicle) return null
@@ -19,13 +20,61 @@ function snapshotControls (controls) {
   return Object.fromEntries(CONTROL_KEYS.map(key => [key, !!controls[key]]))
 }
 
+// LocalPlayer.aiStep (26.x): the sprint key only STARTS sprinting. Once sprinting, the player
+// keeps sprinting without it until shouldStopRunSprinting(): no forward impulse, a non-minor
+// wall hit or not enough food. A client that stops sprinting on Ctrl release while W is still
+// held sends STOP_SPRINTING and walk-speed moves that the vanilla client never produces.
+// isSprintingPossible(false) also requires !isInShallowWater() = !(isInWater && !isUnderWater):
+// wading with the head above water stops sprinting. Crouching (isMovingSlowly) only prevents
+// STARTING to sprint; it is not in shouldStopRunSprinting.
 function canSprint (bot, controls, state = bot.entity) {
+  const vanilla = !!bot.registry?.version && walking.supported(bot.registry.version)
   const unlimited = bot.game?.gameMode === 'creative' || bot.game?.gameMode === 'spectator'
   const minorAllowed = bot.registry?.version?.['>=']('1.18') && state?.minorHorizontalCollision
   const hitWall = state?.isCollidedHorizontally && !minorAllowed
-  const usingItem = bot.registry?.version && walking.supported(bot.registry.version) && itemUse(bot)
-  return !!(controls.sprint && controls.forward && !controls.back && !controls.sneak &&
-    !hitWall && (!usingItem || usingItem.canSprint) && (unlimited || bot.food == null || bot.food > 6))
+  const usingItem = vanilla && itemUse(bot)
+  const latched = vanilla && !!state?.botifySprinting
+  // LocalPlayer.aiStep runs after this tick's Entity.baseTick fluid update: probe the current position.
+  const probe = vanilla && fluidNow(bot, state)
+  const shallowWater = probe ? probe.inWater && !probe.eyesInWater : false
+  const crouchBlocks = controls.sneak && (!vanilla || !latched)
+  return !!((controls.sprint || latched) && controls.forward && !controls.back && !crouchBlocks &&
+    !hitWall && !shallowWater && (!usingItem || usingItem.canSprint) && (unlimited || bot.food == null || bot.food > 6))
+}
+
+function fluidNow (bot, state) {
+  const pos = state?.pos ?? state?.position
+  if (!pos || !bot.blockAt) return null
+  return walking.fluidProbe({ getBlock: p => bot.blockAt(p, false) }, pos, !!state?.control?.sneak)
+}
+
+// Level.getEntityCollisions for a player: boats, minecarts and shulkers are solid.
+const SOLID_ENTITY = /(^|_)(boat|raft|minecart)$|^shulker$/
+function entityBoxes (bot, query) {
+  const boxes = []
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!entity || entity === bot.entity || entity === bot.vehicle || !SOLID_ENTITY.test(entity.name || '')) continue
+    const w = (entity.width || 0) / 2
+    const h = entity.height || 0
+    const p = entity.position
+    if (!p || !w || !h) continue
+    const box = [p.x - w, p.y, p.z - w, p.x + w, p.y + h, p.z + w]
+    if (box[3] < query.minX || box[0] > query.maxX || box[4] < query.minY || box[1] > query.maxY ||
+      box[5] < query.minZ || box[2] > query.maxZ) continue
+    boxes.push(box)
+  }
+  return boxes
+}
+
+/**
+ * Keys that stop sprinting the way a player does: Ctrl release alone keeps a vanilla player
+ * sprinting, so a "walk" request while sprinting releases W for one tick. Mutates `controls`.
+ */
+function releaseSprint (bot, controls) {
+  if (controls.forward && !controls.sprint && bot.entity?.botifySprinting && canSprint(bot, controls)) {
+    controls.forward = false
+  }
+  return controls
 }
 
 function minorCollision (state, dx, dz) {
@@ -64,8 +113,12 @@ function attachMovementPhysics (bot) {
       // New PlayerState instances don't copy this field in prismarine-physics 1.11.1.
       // Reused pathfinder predictions keep their own collision result between simulated ticks.
       if (state.minorHorizontalCollision == null) state.minorHorizontalCollision = !!bot.entity.minorHorizontalCollision
+      // Sprinting is latched (see canSprint): fresh states start from the bot's current state,
+      // reused prediction states carry their own from tick to tick.
+      if (state.botifySprinting == null) state.botifySprinting = !!bot.entity.botifySprinting
       state.control = snapshotControls(controls)
       state.control.sprint = canSprint(bot, controls, state)
+      state.botifySprinting = state.control.sprint
       if (walking.supported(bot.registry.version)) {
         state.botifyYaw = bot._botifyWireYaw?.(state.yaw) ?? walking.yawDegrees(state.yaw)
         state.botifyUseItem = itemUse(bot)
@@ -85,13 +138,17 @@ function attachMovementPhysics (bot) {
         }
       }
       try {
-        const result = simulate(state, world)
+        const solidEntities = walking.supported(bot.registry.version) && bot.entities
+          ? { getBlock: pos => world.getBlock(pos), botifyEntityBoxes: query => entityBoxes(bot, query) }
+          : world
+        const result = simulate(state, solidEntities)
         state.minorHorizontalCollision = !!state.isCollidedHorizontally && minorCollision(state, state.pos.x - startX, state.pos.z - startZ)
         if (!state[COLLISION_APPLY]) {
           const apply = state.apply
           state.apply = function (target) {
             const result = apply.call(this, target)
             target.entity.minorHorizontalCollision = this.minorHorizontalCollision
+            target.entity.botifySprinting = this.botifySprinting
             for (const key of WALK_STATE) target.entity[key] = this[key]
             return result
           }
@@ -110,8 +167,12 @@ function attachMovementPhysics (bot) {
     if (bot.entity) for (const key of WALK_STATE) delete bot.entity[key]
   }
   bot._client.on('position', resetSupport)
-  bot.on('respawn', resetSupport)
+  // A teleport keeps the sprint state (vanilla); a new player entity starts without it.
+  bot.on('respawn', () => {
+    resetSupport()
+    if (bot.entity) bot.entity.botifySprinting = false
+  })
   install()
 }
 
-module.exports = { attachMovementPhysics, canSprint }
+module.exports = { attachMovementPhysics, canSprint, releaseSprint }

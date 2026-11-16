@@ -92,13 +92,15 @@ function attachSmoothLook (bot) {
     // Even a pathfinder "force" request is a target; server corrections use their own handler.
     bot.look = (yaw, pitch) => turn(yaw, pitch)
   })
-  function navigate (yaw) {
+  // `pitch` is where the walker looks vertically (0 = horizon); Entity.turn clamps it to ±90°.
+  function navigate (yaw, pitch = 0) {
     if (spinning) return Promise.resolve(false)
+    pitch = clamp(pitch, Math.PI / 2)
     // Navigation follows a travel heading, not an entity's head. Keep a stable view for
     // small changes in bearing; precise block interaction still uses turn().
-    if (target?.mode === 'navigation' && Math.abs(wrap(yaw - target.yaw)) < 6 * DEG) return target.promise
-    if (!target && Math.abs(wrap(yaw - bot.entity.yaw)) < 6 * DEG && Math.abs(bot.entity.pitch) < 4 * DEG) return Promise.resolve(true)
-    return turn(yaw, 0, () => false, 'navigation')
+    if (target?.mode === 'navigation' && Math.abs(wrap(yaw - target.yaw)) < 6 * DEG && Math.abs(pitch - target.pitch) < 3 * DEG) return target.promise
+    if (!target && Math.abs(wrap(yaw - bot.entity.yaw)) < 6 * DEG && Math.abs(bot.entity.pitch - pitch) < 4 * DEG) return Promise.resolve(true)
+    return turn(yaw, pitch, () => false, 'navigation')
   }
   function spin (enabled, degreesPerSecond = 120) {
     if (!Number.isFinite(degreesPerSecond) || degreesPerSecond < 1 || degreesPerSecond > 720) {

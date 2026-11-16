@@ -310,6 +310,200 @@ test('26.1 sprint key without forward input does not accelerate strafing or anno
   assert.equal(b.packets.find(p => p.name === 'player_input').params.inputs.sprint, true)
 })
 
+test('26.1 releasing Ctrl keeps sprinting while W is held; releasing W stops it (LocalPlayer.aiStep)', () => {
+  const f = fixture()
+  const walk = fixture()
+  f.bot.setControlState('forward', true)
+  f.bot.setControlState('sprint', true)
+  walk.bot.setControlState('forward', true)
+  for (let i = 0; i < 10; i++) { f.tick(); walk.tick() }
+  f.packets.length = 0
+  f.bot.setControlState('sprint', false)
+  const sprintStep = distance(f)
+  const walkStep = distance(walk)
+  assert.equal(f.packets.some(p => p.name === 'entity_action'), false, 'no STOP_SPRINTING on Ctrl release')
+  assert.equal(f.packets.find(p => p.name === 'player_input').params.inputs.sprint, false)
+  assert.ok(sprintStep > walkStep * 1.25, `still sprint speed: ${sprintStep} vs walking ${walkStep}`)
+  assert.equal(f.bot.entity.botifySprinting, true)
+  f.packets.length = 0
+  f.bot.setControlState('forward', false)
+  f.tick()
+  assert.equal(f.packets.find(p => p.name === 'entity_action')?.params.actionId, 'stop_sprinting')
+  f.packets.length = 0
+  f.bot.setControlState('forward', true)
+  f.tick()
+  assert.equal(f.packets.some(p => p.name === 'entity_action'), false, 'W alone does not start sprinting again')
+})
+
+function worldOf (f, pick) {
+  const Block = require('prismarine-block')(f.bot.registry)
+  f.bot.blockAt = pos => {
+    const p = pos.floored()
+    const name = pick(p.x, p.y, p.z)
+    if (name === null) return null
+    const block = Block.fromStateId(f.bot.registry.blocksByName[name].minStateId, 0)
+    block.position = p
+    return block
+  }
+}
+
+test('26.1 wading in shallow water stops sprinting (isSprintingPossible: !isInShallowWater)', () => {
+  const f = fixture()
+  worldOf(f, (x, y, z) => y < 1 ? 'stone' : y === 1 && z < -2 ? 'water' : 'air')
+  f.bot.setControlState('forward', true)
+  f.bot.setControlState('sprint', true)
+  for (let i = 0; i < 8; i++) f.tick()
+  assert.equal(f.bot.entity.botifySprinting, true, 'sprints on land')
+  // The sprint check of a tick sees that tick's fluid state (baseTick runs before aiStep):
+  // the tick that travels in water already does it without sprint.
+  for (let i = 0; i < 20 && !f.bot.entity.isInWater; i++) {
+    f.packets.length = 0
+    f.tick()
+  }
+  assert.equal(f.bot.entity.isInWater, true)
+  assert.equal(f.bot.entity.botifySprinting, false, 'head above water: sprint stops in the entering tick')
+  assert.equal(f.packets.find(p => p.name === 'entity_action')?.params.actionId, 'stop_sprinting')
+})
+
+test('26.1 water: enters with the 0.001-deflated box, sinks at travelInWater speed, swims up with jump', () => {
+  // A 2-deep pool north of the start: water at y=0 (surface 0.889) and y=-1.
+  const pool = (x, y, z) => z <= -2 && z >= -5 && (y === 0 || y === -1)
+  const f = fixture()
+  worldOf(f, (x, y, z) => pool(x, y, z) ? 'water' : y < 1 && !(z <= -2 && z >= -5 && y >= -1) ? 'stone' : 'air')
+  f.bot.setControlState('forward', true)
+  let entered = null
+  const trace = []
+  for (let i = 0; i < 60; i++) {
+    const startY = f.bot.entity.position.y
+    f.tick()
+    trace.push({ y: f.bot.entity.position.y, vy: f.bot.entity.velocity.y, water: f.bot.entity.isInWater })
+    if (entered === null && f.bot.entity.isInWater) entered = { tick: i, startY }
+  }
+  assert.ok(entered, 'reaches the water')
+  // EntityFluidInteraction: in water as soon as the box bottom (+0.001) is below the surface.
+  assert.ok(entered.startY + 0.001 >= 0.889 - 0.5, 'not detected late')
+  const settled = trace.slice(-10)
+  for (const t of settled) assert.ok(t.vy > -0.03 && t.vy < 0, `sinks slowly in water (vy ${t.vy})`)
+  // Holding jump in deep water swims up (+0.04 per tick).
+  f.bot.setControlState('forward', false)
+  f.bot.setControlState('jump', true)
+  const before = f.bot.entity.position.y
+  for (let i = 0; i < 20; i++) f.tick()
+  assert.ok(f.bot.entity.position.y > before + 0.3, `swims up: ${before} -> ${f.bot.entity.position.y}`)
+})
+
+test('26.1 flowing water: FlowingFluid.getFlow pushes downstream; solid sides do not count', () => {
+  const walking = require('../src/vanilla-walking')
+  // A channel at y=0 running west (-x) from a source at x=3, solid ground on both sides.
+  const levels = { 3: 0, 2: 1, 1: 2, 0: 3, '-1': 4 }
+  const f = fixture()
+  const Block = require('prismarine-block')(f.bot.registry)
+  f.bot.blockAt = pos => {
+    const p = pos.floored()
+    let block
+    if (p.y === 0 && p.z === 0 && p.x in levels) block = Block.fromStateId(f.bot.registry.blocksByName.water.minStateId + levels[p.x], 0)
+    else block = Block.fromStateId(p.y <= 0 ? f.bot.registry.blocksByName.stone.minStateId : 0, 0)
+    block.position = p
+    return block
+  }
+  const world = { getBlock: p => f.bot.blockAt(p) }
+  const at = new Vec3(1, 0, 0)
+  const flow = walking.fluidFlow(world, at, walking.fluidOf(world.getBlock(at)), world.getBlock(at))
+  assert.ok(flow.x < -0.99 && Math.abs(flow.z) < 1e-9, `flows west only: ${JSON.stringify(flow)}`)
+  f.bot.entity.position.set(1.5, 0, 0.5)
+  f.bot.entity.onGround = true
+  const startX = f.bot.entity.position.x
+  for (let i = 0; i < 20; i++) f.tick()
+  assert.ok(f.bot.entity.isInWater)
+  assert.ok(f.bot.entity.position.x < startX - 0.05, `carried downstream: ${startX} -> ${f.bot.entity.position.x}`)
+  assert.ok(Math.abs(f.bot.entity.position.z - 0.5) < 1e-6, 'no sideways push from the solid banks')
+})
+
+test('26.1 crouching keeps an existing sprint but does not start one (isMovingSlowly)', () => {
+  const f = fixture()
+  f.bot.setControlState('forward', true)
+  f.bot.setControlState('sprint', true)
+  for (let i = 0; i < 5; i++) f.tick()
+  f.packets.length = 0
+  f.bot.setControlState('sneak', true)
+  f.tick()
+  assert.equal(f.packets.some(p => p.name === 'entity_action' && /sprinting/.test(p.params.actionId)), false)
+  assert.equal(f.bot.entity.botifySprinting, true)
+  const g = fixture()
+  g.bot.setControlState('forward', true)
+  g.bot.setControlState('sneak', true)
+  g.bot.setControlState('sprint', true)
+  g.tick()
+  assert.equal(g.bot.entity.botifySprinting, false, 'cannot start sprinting while crouching')
+})
+
+test('26.1 gravity comes from the minecraft:gravity attribute', () => {
+  const f = fixture()
+  f.bot.entity.position.set(0.5, 10, 0.5)
+  f.bot.entity.onGround = false
+  f.bot.entity.attributes['minecraft:gravity'] = { value: 0.04, modifiers: [] }
+  f.tick()
+  assert.ok(Math.abs(f.bot.entity.velocity.y - (0 - 0.04) * Math.fround(0.98)) < 1e-9, `vy ${f.bot.entity.velocity.y}`)
+})
+
+test('26.1 above an unloaded chunk the player drifts at -0.1 instead of falling', () => {
+  const f = fixture()
+  worldOf(f, (x, y) => y > 5 ? 'air' : null)
+  f.bot.entity.position.set(0.5, 6, 0.5)
+  f.bot.entity.onGround = false
+  f.tick()
+  assert.ok(Math.abs(f.bot.entity.velocity.y - -0.1 * Math.fround(0.98)) < 1e-9, `vy ${f.bot.entity.velocity.y}`)
+})
+
+test('26.1 minecarts are solid; a boat is low enough to step onto', () => {
+  const f = fixture()
+  f.bot.entities = { 2: { id: 2, name: 'minecart', position: new Vec3(0.5, 1, -1.5), width: 0.98, height: 0.7 } }
+  f.bot.setControlState('forward', true)
+  for (let i = 0; i < 20; i++) f.tick()
+  assert.ok(f.bot.entity.position.z >= -1.01 + 0.3 - 1e-6, `stopped at the minecart, z ${f.bot.entity.position.z}`)
+  assert.equal(f.bot.entity.position.y, 1)
+  const g = fixture()
+  g.bot.entities = { 2: { id: 2, name: 'oak_boat', position: new Vec3(0.5, 1, -1.5), width: 1.375, height: 0.5625 } }
+  g.bot.setControlState('forward', true)
+  let top = 0
+  for (let i = 0; i < 20; i++) { g.tick(); top = Math.max(top, g.bot.entity.position.y) }
+  assert.ok(Math.abs(top - 1.5625) < 1e-6, `stepped onto the boat, highest y ${top}`)
+})
+
+test('26.1 leaving a cobweb: the move that left it still counts (swept checkInsideBlocks)', () => {
+  const f = fixture()
+  // Cobweb in the block north of the start (z = -1); the bot starts touching it and walks south.
+  worldOf(f, (x, y, z) => y < 1 ? 'stone' : y === 1 && x === 0 && z === -1 ? 'cobweb' : 'air')
+  f.bot.entity.position.set(0.5, 1, 0.2)
+  f.bot.entity.yaw = Math.PI // south (+z)
+  f.bot.setControlState('forward', true)
+  let left = null
+  for (let i = 0; i < 40 && left === null; i++) {
+    const start = f.bot.entity.position.z
+    f.tick()
+    // the tick whose START box touched the web but whose END box no longer does
+    if (start - 0.3 < 0 - 9.999999747378752e-6 && f.bot.entity.position.z - 0.3 >= 0) left = i
+  }
+  assert.notEqual(left, null, 'walked out of the cobweb')
+  const before = f.bot.entity.position.z
+  f.tick()
+  const step = f.bot.entity.position.z - before
+  assert.ok(step < 0.05, `the next move is still slowed by the web (moved ${step.toFixed(4)})`)
+})
+
+test('26.1 sweet berry bushes slow the player like makeStuckInBlock(0.8, 0.75, 0.8)', () => {
+  const plain = fixture()
+  const bush = fixture()
+  worldOf(bush, (x, y) => y < 1 ? 'stone' : y === 1 ? 'sweet_berry_bush' : 'air')
+  for (const f of [plain, bush]) {
+    f.bot.setControlState('forward', true)
+    for (let i = 0; i < 10; i++) f.tick()
+  }
+  const free = 0.5 - plain.bot.entity.position.z
+  const slowed = 0.5 - bush.bot.entity.position.z
+  assert.ok(slowed < free * 0.8, `bush ${slowed.toFixed(3)} vs free ${free.toFixed(3)}`)
+})
+
 test('26.1 losing hunger stops sprint in both simulation and packets', () => {
   const f = fixture()
   f.bot.setControlState('forward', true)
@@ -625,6 +819,237 @@ test(`${version}: real pathfinder goto completes a route and brakes without chan
   assert.equal(f.bot.entity.position.floored().z, -12)
 })
 }
+
+// Real pathfinder + production smooth look on a custom block layout.
+function routeFixture (solid) {
+  const f = fixture('26.1', true, true)
+  const { pathfinder, Movements } = require('mineflayer-pathfinder')
+  const Block = require('prismarine-block')(f.bot.registry)
+  const stone = f.bot.registry.blocksByName.stone.minStateId
+  f.bot.blockAt = pos => {
+    const p = pos.floored()
+    const block = Block.fromStateId(solid(p.x, p.y, p.z) ? stone : 0, 0)
+    block.position = p
+    return block
+  }
+  f.bot.inventory.items = () => []
+  f.bot.entities = {}
+  f.bot.game.minY = -64 // drop-down search scans down to the world bottom
+  pathfinder(f.bot)
+  const movements = new Movements(f.bot)
+  movements.canDig = false
+  movements.allow1by1towers = false
+  movements.scafoldingBlocks = []
+  movements.allowParkour = true
+  movements.allowSprinting = true
+  f.bot.pathfinder.setMovements(movements)
+  f.bot.pathfinder.enablePathShortcut = true
+  return f
+}
+
+async function runRoute (f, goal, limit) {
+  let arrived = false
+  f.bot.once('goal_reached', () => { arrived = true })
+  const goto = f.bot.pathfinder.goto(goal)
+  let error = null
+  goto.catch(e => { error = e })
+  const trace = []
+  for (let i = 0; i < limit && !arrived && !error; i++) {
+    f.tick()
+    const c = f.bot.controlState
+    const v = f.bot.entity.velocity
+    trace.push({ moving: c.forward || c.back || c.left || c.right, speed: Math.hypot(v.x, v.z), pos: f.bot.entity.position.clone() })
+  }
+  await new Promise(resolve => setImmediate(resolve))
+  return { arrived, error, trace }
+}
+
+test('pathfinder walks off a 2-block ledge without stopping at the edge', async () => {
+  // Floor at y=0 up to z=-3, then a floor two blocks lower.
+  const f = routeFixture((x, y, z) => z > -4 ? y < 1 : y < -1)
+  const { goals } = require('mineflayer-pathfinder')
+  const { arrived, error, trace } = await runRoute(f, new goals.GoalBlock(0, -1, -12), 200)
+  assert.equal(error, null)
+  assert.equal(arrived, true)
+  const start = trace.findIndex(t => t.speed > 0.15)
+  const landed = trace.findIndex(t => t.pos.y < -0.9)
+  assert.ok(start >= 0 && landed > start, `start ${start}, landed ${landed}`)
+  const slowest = Math.min(...trace.slice(start, landed).map(t => t.speed))
+  assert.ok(slowest > 0.1,`keeps walking over the edge (slowest ${slowest.toFixed(3)} b/tick)`)
+  assert.ok(trace.slice(start, landed).every(t => t.moving), 'movement keys stay pressed up to the landing')
+})
+
+test('pathfinder turns a corner while moving and keeps moving', async () => {
+  // A wall at z=-3 from x<=4 forces an L-shaped route.
+  const f = routeFixture((x, y, z) => y < 1 || (z === -3 && x <= 4 && y <= 2))
+  const { goals } = require('mineflayer-pathfinder')
+  const { arrived, error, trace } = await runRoute(f, new goals.GoalBlock(8, 1, -8), 200)
+  assert.equal(error, null)
+  assert.equal(arrived, true)
+  const start = trace.findIndex(t => t.speed > 0.15)
+  const route = trace.slice(start, -3)
+  assert.ok(route.every(t => t.moving), 'no tick with all movement keys released')
+  assert.ok(Math.min(...route.map(t => t.speed)) > 0.08, 'no stop to turn')
+})
+
+test('pathfinder plans a long route in segments while walking instead of failing on timeout', async () => {
+  // Advance a fake clock inside A* so each tick and each segment only expands a few nodes.
+  const AStar = require('mineflayer-pathfinder/lib/astar')
+  const compute = AStar.prototype.compute
+  const segments = new Set()
+  AStar.prototype.compute = function () {
+    segments.add(this)
+    const descriptor = Object.getOwnPropertyDescriptor(performance, 'now')
+    let clock = performance.now()
+    Object.defineProperty(performance, 'now', { configurable: true, value: () => (clock += 0.05) })
+    try { return compute.call(this) } finally {
+      if (descriptor) Object.defineProperty(performance, 'now', descriptor)
+      else delete performance.now
+    }
+  }
+  try {
+    const f = routeFixture((x, y, z) => y < 1 || (z === -10 && x <= 3 && y <= 2) || (z === -25 && x >= -3 && y <= 2))
+    f.bot.pathfinder.tickTimeout = 0.3
+    f.bot.pathfinder.thinkTimeout = 120
+    const { goals } = require('mineflayer-pathfinder')
+    const { arrived, error, trace } = await runRoute(f, new goals.GoalBlock(0, 1, -40), 500)
+    assert.equal(error, null)
+    assert.equal(arrived, true)
+    assert.ok(segments.size >= 3, `planned in ${segments.size} segments`)
+    const start = trace.findIndex(t => t.speed > 0.15)
+    const stops = trace.slice(start, -3).filter(t => t.speed < 0.05).length
+    assert.ok(stops <= 2, `${stops} standing ticks while the next segment was planned`)
+  } finally {
+    AStar.prototype.compute = compute
+  }
+})
+
+test('pathfinder stops sprinting the vanilla way (W released), never by Ctrl alone with W held', async () => {
+  // Flat run, then a 3-block drop: the bot must stop sprinting before the high ledge.
+  const f = routeFixture((x, y, z) => z > -8 ? y < 1 : y < -2)
+  const { goals } = require('mineflayer-pathfinder')
+  const { arrived, error } = await runRoute(f, new goals.GoalBlock(0, -2, -14), 300)
+  assert.equal(error, null)
+  assert.equal(arrived, true)
+  // Replay the packets as the server sees them (flat route: no wall stops sprinting).
+  const inputs = { forward: false }
+  const stops = []
+  for (const p of f.packets) {
+    if (p.name === 'player_input') Object.assign(inputs, p.params.inputs)
+    if (p.name === 'entity_action' && p.params.actionId === 'stop_sprinting') stops.push(inputs.forward)
+  }
+  assert.ok(stops.length > 0, 'the route stops sprinting at least once')
+  assert.deepEqual(stops.filter(forward => forward), [], 'STOP_SPRINTING while W is held')
+})
+
+test('test walking mode: W only, the head faces the route in yaw and pitch, turns on the spot', async () => {
+  // L-shaped route around a wall, then a 3-block drop.
+  const f = routeFixture((x, y, z) => (x < 4 ? y < 1 : y < -2) || (z === -3 && x <= 2 && y <= 2))
+  f.bot.pathfinder.humanMode = () => true
+  const { goals } = require('mineflayer-pathfinder')
+  const pitches = []
+  let strafed = false
+  f.bot.on('physicsTick', () => {
+    const c = f.bot.controlState
+    if (c.left || c.right || c.back) strafed = true
+    pitches.push({ x: f.bot.entity.position.x, pitch: f.bot.entity.pitch })
+  })
+  const { arrived, error } = await runRoute(f, new goals.GoalBlock(8, -2, -6), 300)
+  assert.equal(error, null)
+  assert.equal(arrived, true)
+  assert.equal(strafed, false, 'no A/S/D: walks only forward like a player looking where he goes')
+  assert.ok(pitches.every(p => Math.abs(p.pitch) <= Math.PI / 2), 'pitch stays within ±90°')
+  const beforeDrop = pitches.filter(p => p.x > 2 && p.x < 3.6)
+  assert.ok(beforeDrop.some(p => p.pitch < -20 * Math.PI / 180), 'looks down before the drop')
+  // Entity.turn clamps xRot to [-90, 90]: the wire never carries more.
+  for (const p of f.packets.filter(p => p.name === 'look' || p.name === 'position_look')) {
+    assert.ok(p.params.pitch >= -90 && p.params.pitch <= 90)
+  }
+})
+
+test('route walker drives flat stretches with the .follow controller; the pathfinder takes the drop', async () => {
+  const { attachRouteWalker } = require('../src/route-walker')
+  // L-shaped route around a wall, then a 3-block drop.
+  const f = routeFixture((x, y, z) => (x < 4 ? y < 1 : y < -2) || (z === -3 && x <= 2 && y <= 2))
+  const walker = attachRouteWalker(f.bot)
+  const { goals } = require('mineflayer-pathfinder')
+  const branches = new Set()
+  let backwards = false
+  f.bot.on('physicsTick', () => {
+    const c = f.bot.controlState
+    const branch = f.bot.pathfinder.debugState?.branch
+    if (branch === 'walker' && (c.back || ((c.left || c.right) && !c.forward))) backwards = branch
+    if (branch) branches.add(branch.split('+')[0])
+  })
+  try {
+    const { arrived, error, trace } = await runRoute(f, new goals.GoalBlock(8, -2, -6), 300)
+    assert.equal(error, null)
+    assert.equal(arrived, true)
+    assert.ok(branches.has('walker'), 'flat ground is driven by the .follow controller')
+    assert.ok([...branches].some(b => b !== 'walker' && b !== 'recover'), 'the drop is left to the pathfinder')
+    assert.equal(backwards, false, '.follow steering: W, W+A, W+D only')
+    const start = trace.findIndex(t => t.speed > 0.15)
+    const stops = trace.slice(start, -3).filter(t => t.speed < 0.05).length
+    assert.ok(stops <= 3, `${stops} standing ticks on the way`)
+  } finally {
+    walker.stop()
+  }
+  assert.equal(f.bot.listenerCount('botifyNavigationTick'), 0)
+})
+
+test('pathfinder recovers from a server correction: releases keys, replans, avoids a repeated spot', async () => {
+  const f = routeFixture((x, y, z) => y < 1)
+  const { goals } = require('mineflayer-pathfinder')
+  let arrived = false
+  f.bot.once('goal_reached', () => { arrived = true })
+  let error = null
+  f.bot.pathfinder.goto(new goals.GoalBlock(0, 1, -20)).catch(e => { error = e })
+  const correct = (to) => {
+    const from = f.bot.entity.position.clone()
+    f.bot._client.emit('position', { x: to.x, y: to.y, z: to.z, dx: 0, dy: 0, dz: 0, yaw: 180, pitch: 0, flags: {}, teleportId: 50 })
+    f.bot.emit('botifyCorrection', { from, to: f.bot.entity.position.clone(), keys: ['forward', 'sprint'] })
+  }
+  for (let i = 0; i < 25; i++) f.tick()
+  const back = f.bot.entity.position.offset(0, 0, 0.4)
+  correct(back)
+  const keys = () => ['forward', 'back', 'left', 'right', 'jump', 'sprint'].some(k => f.bot.controlState[k])
+  for (let i = 0; i < 4; i++) {
+    f.tick()
+    assert.equal(keys(), false, `keys released while settling (tick ${i})`)
+  }
+  for (let i = 0; i < 6; i++) f.tick()
+  assert.equal(keys(), true, 'walks again after settling')
+  assert.equal(f.bot.controlState.sprint, false, 'no sprint right after a correction')
+  assert.equal(f.bot.pathfinder.movements.exclusionAreasStep.length, 0)
+  correct(back)
+  assert.equal(f.bot.pathfinder.movements.exclusionAreasStep.length, 1, 'a spot corrected twice is avoided')
+  for (let i = 0; i < 400 && !arrived && !error; i++) f.tick()
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(error, null)
+  assert.equal(arrived, true)
+  // A new goal starts without the old avoided cells.
+  f.bot.pathfinder.setGoal(null)
+  assert.equal(f.bot.pathfinder.movements.exclusionAreasStep.length, 0)
+})
+
+test('pathfinder gives up with a clear reason when corrections keep undoing the route', async () => {
+  const f = routeFixture((x, y, z) => y < 1)
+  const { goals } = require('mineflayer-pathfinder')
+  let error = null
+  f.bot.pathfinder.goto(new goals.GoalBlock(0, 1, -20)).catch(e => { error = e })
+  const home = f.bot.entity.position.clone()
+  for (let n = 0; n < 6 && !error; n++) {
+    for (let i = 0; i < 12; i++) f.tick()
+    const from = f.bot.entity.position.clone()
+    f.bot._client.emit('position', { x: home.x, y: home.y, z: home.z, dx: 0, dy: 0, dz: 0, yaw: 180, pitch: 0, flags: {}, teleportId: 60 + n })
+    f.bot.emit('botifyCorrection', { from, to: home, keys: ['forward'] })
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(error?.name, 'NoPath')
+  assert.equal(f.bot.pathfinder.failureReason, 'corrections')
+  assert.equal(['forward', 'back', 'left', 'right', 'sprint'].some(k => f.bot.controlState[k]), false)
+})
 
 function followFixture (version = '26.1') {
   const f = fixture(version, true, true)

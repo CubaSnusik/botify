@@ -2,6 +2,7 @@
 const { PlayerState } = require('prismarine-physics')
 const { goals } = require('mineflayer-pathfinder')
 const { joinCircleFormation } = require('./circle-formation')
+const { releaseSprint } = require('./movement-physics')
 const DEG = Math.PI / 180
 const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle))
 const HAZARDS = /^(water|lava|fire|soul_fire|cobweb|powder_snow|sweet_berry_bush|cactus|magma_block)$/
@@ -190,6 +191,7 @@ function startFollowing (bot, entity, distance, { spin = false, spinSpeed = 120,
     else if (range < distance + 0.45) sprinting = false
     const controls = steering(bot.entity.yaw, yaw, sprinting, spin)
     if (!controls) { apply(null); return }
+    releaseSprint(bot, controls)
     const pace = spacing?.pace() ?? 1
     movementCredit = Math.min(2, movementCredit + pace)
     if (movementCredit < 1) { apply(null); return }
@@ -232,4 +234,4 @@ function startFollowing (bot, entity, distance, { spin = false, spinSpeed = 120,
   }
 }
 
-module.exports = { startFollowing, clearGroundLine, steering }
+module.exports = { startFollowing, clearGroundLine, steering, blockReader }

@@ -278,6 +278,7 @@ class BotInstance extends EventEmitter {
         this.update()
       }
     })
+    this.movementRecovery = recovery // read by the lab API (src/lab.js)
     attachDigDiagnostics(bot, {
       file: this.store.path('digging', encodeURIComponent(this.id) + '.json'),
       log: text => this.log('sys', text)
@@ -337,9 +338,13 @@ class BotInstance extends EventEmitter {
       mov.allowSprinting = true
       mov.allowFreeMotion = false
       mov.canOpenDoors = true
+      // Swimming still runs on Prismarine's (unverified) fluid physics: prefer dry routes.
+      mov.liquidCost = 20
       bot.pathfinder.setMovements(mov)
       bot.pathfinder.enablePathShortcut = true
       bot.pathfinder.tickTimeout = 8 // re-tuned per command in commands.js (shared CPU budget)
+      // `.walkmode тест`: look where walking (yaw and pitch), W only. Read live from settings.
+      bot.pathfinder.humanMode = () => this.store.settings.behavior?.walkMode === 'test'
 
       this.attempt = 0
       this.setState('online')

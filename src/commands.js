@@ -16,6 +16,7 @@
 const { goals } = require('mineflayer-pathfinder')
 const { Vec3 } = require('vec3')
 const { startFollowing } = require('./follow-navigation')
+const { attachRouteWalker } = require('./route-walker')
 const { chopTrees } = require('./tree-chopper')
 const { farmTrees, selectFarmPlot, chooseSpecies } = require('./tree-farm')
 const { describeDigSpeed } = require('./dig-speed')
@@ -134,7 +135,8 @@ function tunePathfinder (inst, target) {
   const bot = inst.bot
   const online = Math.max(1, inst.manager.onlineCount())
   bot.pathfinder.tickTimeout = Math.max(3, Math.floor(24 / online))
-  bot.pathfinder.thinkTimeout = 8000
+  // Per planned segment: on timeout the bot walks the best part found and plans on from its end.
+  bot.pathfinder.thinkTimeout = 4000
   const p = bot.entity.position
   const d = target ? Math.hypot(target.x - p.x, target.z - p.z) + (target.y ? Math.abs(target.y - p.y) : 0) : Infinity
   bot.pathfinder.searchRadius = d < 96 ? Math.ceil(d + 24) : -1
@@ -144,15 +146,24 @@ async function pathTo (inst, goal, signal, target) {
   const bot = inst.bot
   checkCancel(signal)
   tunePathfinder(inst, target)
+  // Flat stretches are walked with the .follow controller; the pathfinder plans and does the rest.
+  const walker = attachRouteWalker(bot)
   try {
     await bot.pathfinder.goto(goal)
   } catch (e) {
     if (signal.aborted) throw new Cancelled()
     const m = String(e.message || e)
+    if (bot.pathfinder.failureReason === 'corrections') {
+      throw new CmdError('сервер раз за разом откатывает бота на этом маршруте — остановлен (см. строки [коррекция])')
+    }
     if (/no ?path/i.test(m) || e.name === 'NoPath') throw new CmdError('путь не найден')
     if (e.name === 'Timeout' || /timeout|too? long/i.test(m)) throw new CmdError('пути туда нет (точка недостижима пешком или слишком далеко)')
     if (/goal ?changed|path ?stopped/i.test(m)) throw new Cancelled()
     throw e
+  } finally {
+    walker.stop()
+    // goto() may settle while the goal is still set (e.g. "nothing closer" results): never leave it behind.
+    if (bot.pathfinder.goal === goal) bot.pathfinder.setGoal(null)
   }
 }
 
@@ -261,7 +272,8 @@ async function holdRmb (inst, bot, signal) {
       await bot.waitForTicks(4) // vanilla right-click repeat delay
     }
   } finally {
-    try { bot.deactivateItem() } catch {}
+    // RELEASE_USE_ITEM only when an item is actually in use: vanilla never sends it otherwise.
+    try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
   }
 }
 
@@ -537,6 +549,43 @@ const COMMANDS = [
     }
   })),
   {
+    name: 'lab',
+    usage: '.lab [on|off]',
+    desc: 'локальный API для живых тестов движения (127.0.0.1, токен в data/lab.json)',
+    async run (ctx) {
+      const lab = require('./lab')
+      const arg = (ctx.args[0] || '').toLowerCase()
+      if (arg === 'on') {
+        const r = await lab.start(ctx.inst.manager, ctx.inst.store.path('lab.json'))
+        ctx.reply(`лаборатория включена: 127.0.0.1:${r.port}, токен в ${r.file}`)
+      } else if (arg === 'off') {
+        ctx.reply(lab.stop() ? 'лаборатория выключена' : 'лаборатория и так выключена')
+      } else {
+        const s = lab.status()
+        ctx.reply(s ? `лаборатория: 127.0.0.1:${s.port}` : 'лаборатория выключена (.lab on — включить)')
+      }
+    }
+  },
+  {
+    name: 'walkmode',
+    aliases: ['movemode'],
+    usage: '.walkmode [обычный|тест]',
+    desc: 'режим ходьбы по маршруту для всех ботов: обычный или тестовый (смотрит куда идёт, только W)',
+    run (ctx) {
+      const store = ctx.inst.store
+      const arg = (ctx.args[0] || '').toLowerCase()
+      const names = { test: 'тест', normal: 'обычный' }
+      if (!arg) {
+        ctx.reply(`режим ходьбы: ${names[store.settings.behavior?.walkMode === 'test' ? 'test' : 'normal']}`)
+        return
+      }
+      const mode = /^(тест|test|t)$/.test(arg) ? 'test' : /^(обычный|normal|n|default)$/.test(arg) ? 'normal' : null
+      if (!mode) throw new CmdError('usage: .walkmode [обычный|тест]')
+      store.updateSettings({ behavior: { walkMode: mode } })
+      ctx.reply(`режим ходьбы: ${names[mode]}`)
+    }
+  },
+  {
     name: 'stop',
     aliases: ['s', 'cancel'],
     usage: '.stop',
@@ -549,7 +598,8 @@ const COMMANDS = [
         bot.smoothLook?.cancel()
         try { bot.pathfinder.setGoal(null) } catch {}
         try { bot.stopDigging() } catch {}
-        try { bot.deactivateItem() } catch {}
+        // Mineflayer sends RELEASE_USE_ITEM unconditionally; vanilla only while using an item.
+        try { if (bot.usingHeldItem) bot.deactivateItem() } catch {}
         bot.clearControlStates()
       }
       ctx.reply('остановлен')
@@ -847,7 +897,12 @@ const COMMANDS = [
     desc: 'ПКМ предметом в руке (зелье, лук, щит…)',
     run (ctx) {
       const bot = needOnline(ctx.inst)
-      if (ctx.args[0] === 'stop') { bot.deactivateItem(); ctx.reply('отпустил ПКМ'); return }
+      if (ctx.args[0] === 'stop') {
+        const using = !!bot.usingHeldItem
+        if (using) bot.deactivateItem()
+        ctx.reply(using ? 'отпустил ПКМ' : 'ПКМ не зажата')
+        return
+      }
       bot.activateItem()
       ctx.reply(`использую ${bot.heldItem?.displayName || 'руку'}`)
     }
