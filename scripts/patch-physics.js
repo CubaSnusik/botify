@@ -310,6 +310,21 @@ function patchJumpMode (source) {
       } else if ((vanillaWalking ? botifyJump === 'ground' : entity.onGround) && entity.jumpTicks === 0) {`)
 }
 
+// LivingEntity.checkFallDamage (26.x), called from Entity.move after the collision: a player
+// that was not in water at the start of the tick re-runs the fluid update for the NEW position,
+// so the current of water it just stepped into is added to the velocity on that same tick (before
+// the collision/landing resets and the friction). Grim simulates this too; without it every entry
+// into flowing water is off by one current impulse and gets set back.
+function patchFallFluidCheck (source) {
+  const marker = '// Botify: LivingEntity.checkFallDamage fluid update.'
+  if (source.includes(marker)) return source
+  const from = '    if (vanillaWalking) walking.updateSupport(entity, world, physics.playerHalfWidth, dx, dy, dz)\n'
+  if (source.split(from).length !== 2) throw new Error('Unsupported prismarine-physics fall-damage site')
+  return source.replace(from, `${from}    ${marker}
+    if (vanillaWalking && !entity.isInWater) walking.updateFluids(entity, world, getPlayerBB(pos), null)
+`)
+}
+
 function patchPhysics () {
   const file = require.resolve('prismarine-physics')
   const source = fs.readFileSync(file, 'utf8')
@@ -317,7 +332,7 @@ function patchPhysics () {
   if (!normalized.includes(NEW_THRESHOLD) && normalized.split(OLD_THRESHOLD).length !== 2) {
     throw new Error('Unsupported prismarine-physics movement threshold: review scripts/patch-physics.js for this dependency version')
   }
-  const patched = patchJumpMode(patchVanillaFlow(patchInsideBlocks(patchFluids(patchEntityMove(patchBlockFactors(patchVersionedFriction(patchCollisionFlags(patchSupport(patchWalking(normalized.includes(NEW_THRESHOLD) ? normalized : normalized.replace(OLD_THRESHOLD, NEW_THRESHOLD), file))))))))))
+  const patched = patchFallFluidCheck(patchJumpMode(patchVanillaFlow(patchInsideBlocks(patchFluids(patchEntityMove(patchBlockFactors(patchVersionedFriction(patchCollisionFlags(patchSupport(patchWalking(normalized.includes(NEW_THRESHOLD) ? normalized : normalized.replace(OLD_THRESHOLD, NEW_THRESHOLD), file)))))))))))
   if (patched === normalized) return
   if (require.cache[file]) throw new Error('Apply the physics patch before loading Mineflayer/prismarine-physics; restart Botify')
   fs.writeFileSync(file, source.includes('\r\n') ? patched.replace(/\n/g, '\r\n') : patched)

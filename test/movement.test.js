@@ -361,7 +361,11 @@ test('26.1 wading in shallow water stops sprinting (isSprintingPossible: !isInSh
     f.tick()
   }
   assert.equal(f.bot.entity.isInWater, true)
-  assert.equal(f.bot.entity.botifySprinting, false, 'head above water: sprint stops in the entering tick')
+  // LivingEntity.checkFallDamage marks the player as in water at the end of the last dry tick;
+  // the next tick, the first one travelling in water, no longer sprints.
+  f.packets.length = 0
+  f.tick()
+  assert.equal(f.bot.entity.botifySprinting, false, 'head above water: sprint stops in the first water tick')
   assert.equal(f.packets.find(p => p.name === 'entity_action')?.params.actionId, 'stop_sprinting')
 })
 
