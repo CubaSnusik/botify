@@ -19,30 +19,30 @@
 
       <label class="search">
         <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-        <input id="search" placeholder="Поиск ботов" autocomplete="off" spellcheck="false">
+        <input id="search" placeholder="Поиск ботов" data-i18n-placeholder="Поиск ботов" autocomplete="off" spellcheck="false">
         <kbd>Ctrl K</kbd>
       </label>
 
       <nav class="nav">
         <button class="nav-item" id="nav-farm" data-id="farm">
           <svg viewBox="0 0 24 24"><path d="m12 2-7 9h3l-4 6h6v5h4v-5h6l-4-6h3z"/></svg>
-          <span>Автоферма</span>
+          <span data-i18n="Автоферма">Автоферма</span>
         </button>
         <button class="nav-item" id="nav-global" data-id="global">
           <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg>
-          <span>Общая консоль</span>
+          <span data-i18n="Общая консоль">Общая консоль</span>
           <span class="badge" id="online-badge">0</span>
         </button>
       </nav>
 
       <div class="section-head">
-        <span>Боты</span>
+        <span data-i18n="Боты">Боты</span>
         <span class="muted" id="bots-count"></span>
         <div class="spacer"></div>
-        <button class="icon-btn sm" id="connect-all" title="Подключить всех">
+        <button class="icon-btn sm" id="connect-all" title="Подключить всех" data-i18n-title="Подключить всех">
           <svg viewBox="0 0 24 24"><path d="M7 5v14l11-7z" fill="currentColor"/></svg>
         </button>
-        <button class="icon-btn sm" id="disconnect-all" title="Отключить всех">
+        <button class="icon-btn sm" id="disconnect-all" title="Отключить всех" data-i18n-title="Отключить всех">
           <svg viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2" fill="currentColor"/></svg>
         </button>
       </div>
@@ -57,9 +57,9 @@
       <div class="side-bottom">
         <button class="btn primary grow" id="add-bots">
           <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-          Добавить ботов
+          <span data-i18n="Добавить ботов">Добавить ботов</span>
         </button>
-        <button class="icon-btn" id="open-settings" title="Настройки">
+        <button class="icon-btn" id="open-settings" title="Настройки" data-i18n-title="Настройки">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </button>
       </div>
@@ -71,7 +71,7 @@
     </main>
   </div>
 
-  <div id="conn-banner" class="conn-banner hidden">Нет связи с бэкендом — переподключаюсь…</div>
+  <div id="conn-banner" class="conn-banner hidden" data-i18n="Нет связи с бэкендом — переподключаюсь…">Нет связи с бэкендом — переподключаюсь…</div>
   <div id="tooltip" class="tooltip hidden"></div>
   <div id="menu-root"></div>
   <div id="modal-root"></div>

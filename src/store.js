@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS = {
     joinStagger: 1500, // ms after each settled login before starting the next queued account
     viewDistance: 'short' // tiny | short | normal | far
   },
-  ui: { theme: 'dark' },
+  ui: { theme: 'dark', language: 'ru' },
   farm: DEFAULT_FARM,
   friends: []
 }
@@ -71,6 +71,8 @@ class Store extends EventEmitter {
     fs.mkdirSync(dir, { recursive: true })
 
     this.settings = merge(DEFAULT_SETTINGS, readJson(this.settingsFile, {}))
+    this.settings.ui = { ...DEFAULT_SETTINGS.ui, ...this.settings.ui }
+    this.settings.ui.language = this.settings.ui.language === 'en' ? 'en' : 'ru'
     const acc = readJson(this.accountsFile, { version: 1, accounts: [] })
     this.accounts = Array.isArray(acc.accounts) ? acc.accounts : []
     this._timers = {}
@@ -99,6 +101,8 @@ class Store extends EventEmitter {
     if ('farm' in patch) patch = { ...patch, farm: farmSettings({ ...this.settings.farm, ...patch.farm }) }
     if ('friends' in patch) patch = { ...patch, friends: friendNames(patch.friends) }
     this.settings = merge(this.settings, patch)
+    this.settings.ui = { ...DEFAULT_SETTINGS.ui, ...this.settings.ui }
+    this.settings.ui.language = this.settings.ui.language === 'en' ? 'en' : 'ru'
     if (this.settings.server) this.settings.server.port = Number(this.settings.server.port) || null
     this.saveSettings()
     this.emit('settings', this.settings)

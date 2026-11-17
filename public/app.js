@@ -1,3 +1,6 @@
+import { t as tr, getLanguage, setLanguage, translateStatic, botCount, localizeCommand } from './i18n.js'
+import { wrapSelect } from './ui-controls.js'
+
 // ============================================================
 // Botify UI
 // ============================================================
@@ -6,7 +9,7 @@
 const $ = (s, r = document) => r.querySelector(s)
 
 function h (tag, attrs, ...kids) {
-  const el = document.createElement(tag)
+  const el = document.createElement(tag === 'div' && attrs?.class?.split(' ').includes('seg') ? 'botify-segment' : tag)
   if (attrs) {
     for (const [k, v] of Object.entries(attrs)) {
       if (v == null || v === false) continue
@@ -21,7 +24,7 @@ function h (tag, attrs, ...kids) {
   }
   for (const kid of kids.flat(Infinity)) {
     if (kid == null || kid === false) continue
-    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)))
+    el.append(kid instanceof HTMLSelectElement ? wrapSelect(kid) : kid instanceof Node ? kid : document.createTextNode(String(kid)))
   }
   return el
 }
@@ -54,8 +57,8 @@ const ls = {
 }
 
 const VERSIONS = ['auto', '26.2', '26.1', '1.21.11', '1.21.10', '1.21.9', '1.21.8', '1.21.6', '1.21.5', '1.21.4', '1.21.3', '1.21.1', '1.20.6', '1.20.4', '1.20.2', '1.20.1', '1.19.4', '1.19.2', '1.18.2', '1.17.1', '1.16.5', '1.12.2', '1.8.8']
-const STATE_LABEL = { online: 'в сети', offline: 'не в сети', queued: 'в очереди', connecting: 'подключение…', reconnecting: 'переподключение', error: 'ошибка' }
-const TYPE_LABEL = { offline: 'Оффлайн (пиратка)', microsoft: 'Microsoft (вход по коду)', token: 'Access token', refresh: 'Refresh token' }
+const STATE_LABEL = () => ({ online: tr('в сети'), offline: tr('не в сети'), queued: tr('в очереди'), connecting: tr('подключение…'), reconnecting: tr('переподключение'), error: tr('ошибка') })
+const TYPE_LABEL = () => ({ offline: tr('Оффлайн (пиратка)'), microsoft: tr('Microsoft (вход по коду)'), token: 'Access token', refresh: 'Refresh token' })
 
 // ---------- state ----------
 const S = {
@@ -101,14 +104,14 @@ const api = {
     }
     ws.onclose = () => {
       $('#conn-banner').classList.remove('hidden')
-      for (const p of this.pending.values()) p.reject(new Error('соединение потеряно'))
+      for (const p of this.pending.values()) p.reject(new Error(tr('соединение потеряно')))
       this.pending.clear()
       setTimeout(() => this.connect(), 1000)
     }
   },
   call (type, data) {
     return new Promise((resolve, reject) => {
-      if (!this.ws || this.ws.readyState !== 1) return reject(new Error('нет связи с бэкендом'))
+      if (!this.ws || this.ws.readyState !== 1) return reject(new Error(tr('нет связи с бэкендом')))
       const reqId = ++this.seq
       this.pending.set(reqId, { resolve, reject })
       this.ws.send(JSON.stringify({ type, reqId, data }))
@@ -157,7 +160,7 @@ function openMenu (x, y, items) {
     if (it === '-') { menu.append(h('hr')); continue }
     if (it.el) { menu.append(it.el); continue }
     if (it.label && !it.run) { menu.append(h('div', { class: 'lbl' }, it.label)); continue }
-    menu.append(h('button', { onclick: () => { closeMenu(); it.run() } }, it.icon ? icon(it.icon) : null, it.text))
+    menu.append(h('button', { class: it.danger ? 'danger' : null, onclick: () => { closeMenu(); it.run() } }, it.icon ? icon(it.icon) : null, it.text))
   }
   $('#menu-root').append(menu)
   const r = menu.getBoundingClientRect()
@@ -182,7 +185,7 @@ function openModal ({ title, body, foot, wide, onClose, head }) {
   }
   const box = h('div', { class: 'modal' + (wide ? ' wide' : '') },
     h('div', { class: 'modal-head' }, head || null, h('h2', null, title),
-      h('button', { class: 'icon-btn sm', title: 'Закрыть', onclick: () => close(), html: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>' })),
+      h('button', { class: 'icon-btn sm', title: tr('Закрыть'), onclick: () => close(), html: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>' })),
     h('div', { class: 'modal-body' }, body),
     foot ? h('div', { class: 'modal-foot' }, foot) : null
   )
@@ -194,15 +197,15 @@ function openModal ({ title, body, foot, wide, onClose, head }) {
   return api_
 }
 
-function confirmModal (title, text, okText = 'Удалить') {
+function confirmModal (title, text, okText = tr('Удалить')) {
   return new Promise((resolve) => {
     let done = false
     const m = openModal({
       title,
       body: h('div', { style: { color: 'var(--fg-2)' } }, text),
       foot: [
-        h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Отмена'),
-        h('button', { class: 'btn primary', onclick: () => { done = true; m.close(); resolve(true) } }, okText)
+        h('button', { class: 'btn ghost', onclick: () => m.close() }, tr('Отмена')),
+        h('button', { class: 'btn primary danger', onclick: () => { done = true; m.close(); resolve(true) } }, okText)
       ],
       onClose: () => { if (!done) resolve(false) }
     })
@@ -250,21 +253,21 @@ function refreshHead (img, b) {
 }
 
 // ---------- helpers about bots ----------
-const botName = (b) => b.username || (b.type === 'microsoft' ? 'Microsoft-аккаунт' : 'Без имени')
+const botName = (b) => b.username || (b.type === 'microsoft' ? tr('Microsoft-аккаунт') : tr('Без имени'))
 const botTitle = (b) => `${b.accountIssue ? '! ' : ''}${botName(b)}`
 const serverStr = (s) => !s.port || Number(s.port) === 25565 ? s.host : `${s.host}:${s.port}`
 function subText (b) {
-  if (b.accountIssue) return 'утерян / украден · вход остановлен'
-  if (b.state === 'queued') return 'в очереди на вход'
-  if (b.state === 'online' && b.dialog) return `диалог: ${b.dialog.title}`
-  if (b.state === 'online' && b.window) return 'открыто меню'
+  if (b.accountIssue) return tr('утерян / украден · вход остановлен')
+  if (b.state === 'queued') return tr('в очереди на вход')
+  if (b.state === 'online' && b.dialog) return tr('диалог: {0}', b.dialog.title)
+  if (b.state === 'online' && b.window) return tr('открыто меню')
   if (b.state === 'online' && b.live) return `${serverStr(b.server)} · ♥ ${f1(b.live.health)}`
-  if (b.state === 'connecting') return b.authCode ? 'ждёт вход Microsoft' : 'подключение…'
+  if (b.state === 'connecting') return b.authCode ? tr('ждёт вход Microsoft') : tr('подключение…')
   if (b.state === 'reconnecting') {
     const s = b.reconnectAt ? Math.max(0, Math.ceil((b.reconnectAt - Date.now()) / 1000)) : 0
-    return `повтор через ${s}с`
+    return tr('повтор через {0}с', s)
   }
-  if (b.state === 'error') return b.error || 'ошибка'
+  if (b.state === 'error') return b.error || tr('ошибка')
   return serverStr(b.server)
 }
 const onlineCount = () => [...S.bots.values()].filter(b => b.state === 'online').length
@@ -280,6 +283,9 @@ function onHello (d) {
   S.order = d.bots.map(b => b.id)
   S.logs.clear()
   S.inv.clear()
+  setLanguage(S.settings.ui?.language)
+  ls.set('language', getLanguage())
+  translateStatic()
   applyTheme(S.settings.ui?.theme || 'dark')
   renderSidebar()
   const want = S.selected || ls.get('selected', 'global')
@@ -346,11 +352,25 @@ api.on('inventory', ({ id, inv }) => {
 api.on('authCode', ({ id, code }) => {
   const b = S.bots.get(id)
   if (b) { b.authCode = code; patchRow(b); if (S.selected === id) updateBotView() }
-  if (code) toast(`${b ? botName(b) : 'Бот'}: нужен вход Microsoft — код ${code.code}`)
+  if (code) toast(tr('{0}: нужен вход Microsoft — код {1}', b ? botName(b) : tr('Бот'), code.code))
 })
 api.on('settings', (s) => {
   S.settings = s
   applyTheme(s.ui?.theme || 'dark')
+  if (setLanguage(s.ui?.language)) {
+    ls.set('language', getLanguage())
+    translateStatic()
+    // Preserve drafts and selected form values while rebuilding translated views.
+    const fields = [...$('#view').querySelectorAll('input, textarea, select')].map(el => ({ value: el.value, checked: el.checked }))
+    renderSidebar()
+    closeMenu()
+    select(S.selected, true)
+    $('#view').querySelectorAll('input, textarea, select').forEach((el, i) => {
+      if (fields[i]) { el.value = fields[i].value; el.checked = fields[i].checked }
+    })
+    updateFarmStatus()
+    renderTpDock()
+  }
   for (const b of S.bots.values()) patchRow(b)
 })
 api.on('msaCode', (d) => S.msaHandler?.(d))
@@ -412,9 +432,9 @@ function renderSidebar () {
     shown++
   }
   if (!S.bots.size) {
-    list.append(h('div', { class: 'empty-list' }, 'Ботов пока нет.', h('br'), 'Жми «Добавить ботов» внизу.'))
+    list.append(h('div', { class: 'empty-list' }, tr('Ботов пока нет.'), h('br'), tr('Жми «Добавить ботов» внизу.')))
   } else if (!shown) {
-    list.append(h('div', { class: 'empty-list' }, 'Ничего не найдено'))
+    list.append(h('div', { class: 'empty-list' }, tr('Ничего не найдено')))
   }
   updateCounts()
   $('#nav-global').classList.toggle('active', S.selected === 'global')
@@ -425,7 +445,7 @@ function buildRow (b) {
   const power = h('button', {
     class: 'power',
     disabled: !!b.accountIssue,
-    title: isActive(b) ? 'Отключить' : 'Подключить',
+    title: isActive(b) ? tr('Отключить') : tr('Подключить'),
     onclick: (e) => { e.stopPropagation(); togglePower(S.bots.get(b.id)) }
   }, icon('power'))
   const row = h('div', {
@@ -451,7 +471,7 @@ function patchRow (b) {
   row.querySelector('.name').title = b.accountIssue?.reason || ''
   row.querySelector('.power').disabled = !!b.accountIssue
   row.querySelector('.sub').textContent = subText(b)
-  row.querySelector('.power').title = isActive(b) ? 'Отключить' : 'Подключить'
+  row.querySelector('.power').title = isActive(b) ? tr('Отключить') : tr('Подключить')
 }
 
 function updateCounts () {
@@ -466,36 +486,36 @@ function togglePower (b) {
   else act('bot.connect', { id: b.id })
 }
 
-function botMenu (b, x, y) {
+function botMenu (b, x, y, { showPower = true } = {}) {
   if (!b) return
   openMenu(x, y, [
     { label: botName(b) },
-    isActive(b)
-      ? { text: 'Отключить', icon: 'power', run: () => act('bot.disconnect', { id: b.id }) }
-      : { text: 'Подключить', icon: 'plug', run: () => act('bot.connect', { id: b.id }) },
-    { text: 'Настройки бота', icon: 'gear', run: () => botSettingsModal(b.id) },
-    { text: 'Скопировать ник', icon: 'copy', run: () => copy(botName(b)) },
+    ...(showPower ? [isActive(b)
+      ? { text: tr('Отключить'), icon: 'power', run: () => act('bot.disconnect', { id: b.id }) }
+      : { text: tr('Подключить'), icon: 'plug', run: () => act('bot.connect', { id: b.id }) }] : []),
+    { text: tr('Настройки бота'), icon: 'gear', run: () => botSettingsModal(b.id) },
+    { text: tr('Скопировать ник'), icon: 'copy', run: () => copy(botName(b)) },
     '-',
-    { text: 'Удалить', icon: 'trash', run: () => removeBot(b.id) }
+    { text: tr('Удалить'), icon: 'trash', danger: true, run: () => removeBot(b.id) }
   ])
 }
 
 async function removeBot (id) {
   const b = S.bots.get(id)
   if (!b) return
-  const ok = await confirmModal('Удалить бота?', `${botName(b)} будет отключён и удалён вместе с токенами из accounts.json.`)
-  if (ok) act('bot.remove', { id }, 'Бот удалён')
+  const ok = await confirmModal(tr('Удалить бота?'), tr('{0} будет отключён и удалён вместе с токенами из accounts.json.', botName(b)))
+  if (ok) act('bot.remove', { id }, tr('Бот удалён'))
 }
 
 function copy (text) {
-  navigator.clipboard?.writeText(text).then(() => toast('Скопировано'), () => toast('Не удалось скопировать', true))
+  navigator.clipboard?.writeText(text).then(() => toast(tr('Скопировано')), () => toast(tr('Не удалось скопировать'), true))
 }
 
 $('#search').addEventListener('input', (e) => { S.filter = e.target.value; renderSidebar() })
 $('#nav-global').addEventListener('click', () => select('global'))
 $('#nav-farm').addEventListener('click', () => select('farm'))
-$('#connect-all').addEventListener('click', () => act('bots.connectAll', {}, 'Подключаю всех…'))
-$('#disconnect-all').addEventListener('click', () => act('bots.disconnectAll', {}, 'Все отключены'))
+$('#connect-all').addEventListener('click', () => act('bots.connectAll', {}, tr('Подключаю всех…')))
+$('#disconnect-all').addEventListener('click', () => act('bots.disconnectAll', {}, tr('Все отключены')))
 $('#add-bots').addEventListener('click', () => addBotsModal())
 $('#open-settings').addEventListener('click', () => settingsModal())
 
@@ -522,15 +542,15 @@ function updateFarmStatus () {
   for (const b of S.bots.values()) {
     let option = [...V.bot.options].find(o => o.value === b.id)
     if (!option) { option = h('option', { value: b.id }); V.bot.append(option) }
-    option.textContent = botName(b)
+    if (option.textContent !== botName(b)) option.textContent = botName(b)
   }
   const b = S.bots.get(V.bot.value)
-  V.status.textContent = b ? `${botName(b)} · ${STATE_LABEL[b.state]}${b.task ? ' · ' + b.task : ''}` : 'Добавьте бота и подключите его к серверу'
+  V.status.textContent = b ? `${botName(b)} · ${STATE_LABEL()[b.state]}${b.task ? ' · ' + b.task : ''}` : tr('Добавьте бота и подключите его к серверу')
 }
 
 function renderFarm () {
   const config = S.settings.farm || {}
-  $('#topbar').replaceChildren(h('h2', null, 'Автоферма'), h('span', { class: 'muted' }, 'Команда запуска: .autotree · остановка: .stop'))
+  $('#topbar').replaceChildren(h('h2', null, tr('Автоферма')), h('span', { class: 'muted' }, tr('Команда запуска: .autotree · остановка: .stop')))
   const inputs = {}
   const field = (name, label, fallback, type = 'text', min, max) => {
     const input = h('input', { class: 'input', type, value: config[name] ?? fallback, min, max })
@@ -546,53 +566,53 @@ function renderFarm () {
   const botSelect = h('select', { class: 'input' }, [...S.bots.values()].map(b => h('option', { value: b.id }, botName(b))))
   const status = h('div', { class: 'hint' })
   botSelect.addEventListener('change', updateFarmStatus)
-  const friends = h('textarea', { class: 'input', rows: 3, placeholder: 'Ники через пробел, запятую или с новой строки' }, (S.settings.friends || []).join('\n'))
+  const friends = h('textarea', { class: 'input', rows: 3, placeholder: tr('Ники через пробел, запятую или с новой строки') }, (S.settings.friends || []).join('\n'))
   const save = async () => {
     const farm = { species: species.value }
     for (const [name, input] of Object.entries(inputs)) farm[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value.trim()
-    await act('settings.update', { patch: { farm, friends: friends.value.split(/[\s,;]+/).filter(Boolean) } }, 'Настройки автофермы сохранены')
+    await act('settings.update', { patch: { farm, friends: friends.value.split(/[\s,;]+/).filter(Boolean) } }, tr('Настройки автофермы сохранены'))
   }
   const start = h('button', { class: 'btn primary', onclick: async () => {
     start.disabled = true
     try {
       const b = S.bots.get(botSelect.value)
-      if (!b || b.state !== 'online') { toast('Выберите подключённого бота', true); return }
+      if (!b || b.state !== 'online') { toast(tr('Выберите подключённого бота'), true); return }
       await save()
-      await act('bot.command', { id: b.id, line: '.autotree' }, 'Автоферма запущена; ход работы — в чате бота')
+      await act('bot.command', { id: b.id, line: '.autotree' }, tr('Автоферма запущена; ход работы — в чате бота'))
     } catch {} finally { start.disabled = false }
-  } }, 'Сохранить и запустить')
+  } }, tr('Сохранить и запустить'))
   const body = h('div', { class: 'farm-page stack' },
-    h('div', { class: 'sub-h' }, 'Площадка и запуск'),
-    h('p', { class: 'hint' }, 'Бот ищет отдельный квадрат из четырёх блоков земли, подзола или грязи в загруженных чанках и подходит к нему. Топор Shard Axe должен быть в инвентаре.'),
-    h('div', { class: 'farm-grid' }, h('label', { class: 'field' }, h('span', null, 'Бот'), botSelect), h('label', { class: 'field' }, h('span', null, 'Вид саженцев'), species), field('searchRadius', 'Радиус поиска площадки и контейнеров', 32, 'number', 4, 64)),
+    h('div', { class: 'sub-h' }, tr('Площадка и запуск')),
+    h('p', { class: 'hint' }, tr('Бот ищет отдельный квадрат из четырёх блоков земли, подзола или грязи в загруженных чанках и подходит к нему. Топор Shard Axe должен быть в инвентаре.')),
+    h('div', { class: 'farm-grid' }, h('label', { class: 'field' }, h('span', null, tr('Бот')), botSelect), h('label', { class: 'field' }, h('span', null, tr('Вид саженцев')), species), field('searchRadius', tr('Радиус поиска площадки и контейнеров'), 32, 'number', 4, 64)),
     status,
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Пополнение из контейнеров'),
-    toggle('restock', 'Самостоятельно забирать запасы и возвращаться', true),
-    h('p', { class: 'hint' }, 'Табличка на контейнере или непосредственно рядом с ним. Метка должна занимать отдельную строку. Поддерживаются сундуки, бочки, шалкеры, воронки, раздатчики и выбрасыватели.'),
-    h('div', { class: 'farm-grid' }, field('mealLabel', 'Метка: костная мука', '1'), field('saplingLabel', 'Метка: саженцы', '3'), field('experienceLabel', 'Метка: бутылочки опыта', '2'), field('mealCount', 'Запас муки, шт.', 64, 'number', 4, 256), field('saplingCount', 'Запас саженцев, шт.', 64, 'number', 4, 256), field('experienceCount', 'Запас опыта, шт. (0 — не брать)', 16, 'number', 0, 64)),
-    h('p', { class: 'hint' }, 'Опыт только запасается. Автоматическая починка пока не включена.'),
+    h('div', { class: 'sub-h' }, tr('Пополнение из контейнеров')),
+    toggle('restock', tr('Самостоятельно забирать запасы и возвращаться'), true),
+    h('p', { class: 'hint' }, tr('Табличка на контейнере или непосредственно рядом с ним. Метка должна занимать отдельную строку. Поддерживаются сундуки, бочки, шалкеры, воронки, раздатчики и выбрасыватели.')),
+    h('div', { class: 'farm-grid' }, field('mealLabel', tr('Метка: костная мука'), '1'), field('saplingLabel', tr('Метка: саженцы'), '3'), field('experienceLabel', tr('Метка: бутылочки опыта'), '2'), field('mealCount', tr('Запас муки, шт.'), 64, 'number', 4, 256), field('saplingCount', tr('Запас саженцев, шт.'), 64, 'number', 4, 256), field('experienceCount', tr('Запас опыта, шт. (0 — не брать)'), 16, 'number', 0, 64)),
+    h('p', { class: 'hint' }, tr('Опыт только запасается. Автоматическая починка пока не включена.')),
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Автолив и друзья'),
-    toggle('autoLeave', 'Отключаться при появлении постороннего игрока', true),
-    h('p', { class: 'hint' }, 'Во время фарма и походов за запасами. Проверяется вся загруженная область. После автолива переподключения нет: следующий вход — только вручную. Ваши боты и друзья игнорируются.'),
-    h('label', { class: 'field' }, h('span', null, 'Общий список друзей для всех ботов'), friends),
-    h('p', { class: 'hint' }, '.friend add Ник · .friend remove Ник · .friend clear · .friend list. Друзей боты не атакуют.'),
+    h('div', { class: 'sub-h' }, tr('Автолив и друзья')),
+    toggle('autoLeave', tr('Отключаться при появлении постороннего игрока'), true),
+    h('p', { class: 'hint' }, tr('Во время фарма и походов за запасами. Проверяется вся загруженная область. После автолива переподключения нет: следующий вход — только вручную. Ваши боты и друзья игнорируются.')),
+    h('label', { class: 'field' }, h('span', null, tr('Общий список друзей для всех ботов')), friends),
+    h('p', { class: 'hint' }, tr('.friend add Ник · .friend remove Ник · .friend clear · .friend list. Друзей боты не атакуют.')),
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Уведомления Discord'),
-    toggle('discordEnabled', 'Уведомлять о проблемах всех ботов', false),
+    h('div', { class: 'sub-h' }, tr('Уведомления Discord')),
+    toggle('discordEnabled', tr('Уведомлять о проблемах всех ботов'), false),
     field('discordWebhook', 'Discord webhook URL', '', 'password'),
-    field('axeAlertPercent', 'Предупреждать при остатке прочности топора, %', 10, 'number', 1, 100),
-    h('p', { class: 'hint' }, 'Кик/бан, отключение и автолив, смерть, ошибки фермы, частые коррекции и низкая прочность. О расходниках — только если бот открыл контейнер и нужного предмета там нет. Флаг античита по коррекциям не подтверждается. Повтор одной проблемы — не чаще раза в 5 минут. Ссылка сохраняется локально.'),
+    field('axeAlertPercent', tr('Предупреждать при остатке прочности топора, %'), 10, 'number', 1, 100),
+    h('p', { class: 'hint' }, tr('Кик/бан, отключение и автолив, смерть, ошибки фермы, частые коррекции и низкая прочность. О расходниках — только если бот открыл контейнер и нужного предмета там нет. Флаг античита по коррекциям не подтверждается. Повтор одной проблемы — не чаще раза в 5 минут. Ссылка сохраняется локально.')),
     h('button', { class: 'btn', onclick: async event => {
       const button = event.currentTarget; button.disabled = true
       try {
-        if (!botSelect.value) { toast('Добавьте и выберите бота для проверки', true); return }
+        if (!botSelect.value) { toast(tr('Добавьте и выберите бота для проверки'), true); return }
         await save()
-        await act('discord.test', { id: botSelect.value }, 'Проверочное сообщение отправлено в Discord')
+        await act('discord.test', { id: botSelect.value }, tr('Проверочное сообщение отправлено в Discord'))
       } catch {} finally { button.disabled = false }
-    } }, 'Сохранить и проверить Discord'),
-    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => save().catch(() => {}) }, 'Сохранить'), start, h('button', { class: 'btn', onclick: () => { if (botSelect.value) act('bot.command', { id: botSelect.value, line: '.stop' }).catch(() => {}) } }, icon('stop'), 'Остановить'))
+    } }, tr('Сохранить и проверить Discord')),
+    h('div', { class: 'row' }, h('button', { class: 'btn', onclick: () => save().catch(() => {}) }, tr('Сохранить')), start, h('button', { class: 'btn', onclick: () => { if (botSelect.value) act('bot.command', { id: botSelect.value, line: '.stop' }).catch(() => {}) } }, icon('stop'), tr('Остановить')))
   )
   V = { kind: 'farm', bot: botSelect, status }
   $('#view').replaceChildren(body)
@@ -629,7 +649,13 @@ const ARG_HINTS = {
 function createConsole ({ placeholder, onSubmit, historyKey, global = false, botId = null }) {
   const log = h('div', { class: 'log' })
   const input = h('input', { placeholder, spellcheck: 'false', autocomplete: 'off' })
-  const suggest = h('div', { class: 'suggest hidden' })
+  const suggestList = h('div', { class: 'suggest-list' })
+  const suggest = h('div', { class: 'suggest hidden' }, suggestList)
+  const updateSuggestEdges = () => {
+    suggest.classList.toggle('more-above', suggestList.scrollTop > 1)
+    suggest.classList.toggle('more-below', suggestList.scrollHeight - suggestList.clientHeight - suggestList.scrollTop > 1)
+  }
+  suggestList.addEventListener('scroll', updateSuggestEdges, { passive: true })
   const history = ls.get('hist.' + historyKey, [])
   let hi = history.length
   let sIdx = 0
@@ -640,7 +666,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
   function line (e) {
     const kind = e.kind || 'out'
     let text = e.text
-    if (global && kind === 'cmd' && e.count != null) text = `${e.text}   → ${e.count} бот${plural(e.count)}`
+    if (global && kind === 'cmd' && e.count != null) text = `${e.text}   → ${botCount(e.count)}`
     return h('div', { class: 'ln k-' + kind },
       h('time', null, clock(e.t)),
       global && e.bot ? h('span', { class: 'who' }, e.bot) : null,
@@ -653,8 +679,8 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
   }
   function emptyNote () {
     return h('div', { class: 'log-empty' }, global
-      ? 'Команды отсюда уходят всем выбранным ботам (или всем онлайн). Можно адресовать: @Nick1,Nick2 .goto 0 64 0'
-      : 'Пусто. Пиши текст — уйдёт в чат. Команды начинаются с точки: .help')
+      ? tr('Команды отсюда уходят всем выбранным ботам (или всем онлайн). Можно адресовать: @Nick1,Nick2 .goto 0 64 0')
+      : tr('Пусто. Пиши текст — уйдёт в чат. Команды начинаются с точки: .help'))
   }
   function append (e) {
     const stick = nearBottom()
@@ -683,7 +709,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
     needPlayers()
     const t = token.toLowerCase()
     return players.filter(n => n.toLowerCase().startsWith(t) && n !== token).slice(0, 100)
-      .map(n => ({ code: n, desc: 'игрок', value: base + n + ' ' }))
+      .map(n => ({ code: n, desc: tr('игрок'), value: base + n + ' ' }))
   }
 
   // Items are { code, desc, value }: picking one replaces the whole input with `value`.
@@ -696,7 +722,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
     // Arguments being typed: usage with the current argument lit + candidates for it.
     if (typed[3] !== undefined) {
       const c = findCommand(q)
-      if (!c) { setError(true); return showItems([], h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд') }
+      if (!c) { setError(true); return showItems([], h('span', { class: 'err' }, tr('неизвестная команда .{0}', q)), tr('.help — список команд')) }
       const args = typed[3].trim() ? typed[3].trim().split(/\s+/) : []
       const cur = /\s$/.test(typed[3]) ? args.length : args.length - 1
       const token = /\s$/.test(typed[3]) ? '' : args[args.length - 1]
@@ -706,13 +732,13 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
       const base = v.slice(0, v.length - token.length)
       return showItems(extra ? [] : argItems(c.name, cur, args, token, base),
         spec ? usageView(c, spec, cur) : h('code', null, c.usage),
-        extra ? h('span', { class: 'err' }, `лишние аргументы — максимум ${spec.max}`) : c.desc)
+        extra ? h('span', { class: 'err' }, tr('лишние аргументы — максимум {0}', spec.max)) : c.desc)
     }
     // every registered command is listed (the box scrolls); name matches go before alias-only ones
     const byName = S.commands.filter(c => c.name.startsWith(q))
     const byAlias = S.commands.filter(c => !c.name.startsWith(q) && c.aliases.some(a => a.startsWith(q)))
-    const items = [...byName, ...byAlias].map(c => ({ code: c.usage, desc: c.desc, value: `${prefix}.${c.name} `, name: c.name }))
-    if (!items.length && q) { setError(true); return showItems([], h('span', { class: 'err' }, `неизвестная команда .${q}`), '.help — список команд') }
+    const items = [...byName, ...byAlias].map(localizeCommand).map(c => ({ code: c.usage, desc: c.desc, value: `${prefix}.${c.name} `, name: c.name }))
+    if (!items.length && q) { setError(true); return showItems([], h('span', { class: 'err' }, tr('неизвестная команда .{0}', q)), tr('.help — список команд')) }
     setError(null)
     showItems(items)
   }
@@ -724,7 +750,7 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
       const t = at[2].toLowerCase()
       const chosen = new Set(at[1].toLowerCase().split(',').filter(Boolean))
       return [...S.bots.values()].map(b => b.username).filter(n => n && !chosen.has(n.toLowerCase()) && n.toLowerCase().startsWith(t))
-        .map(n => ({ code: '@' + at[1] + n, desc: 'бот', value: `@${at[1]}${n} ` }))
+        .map(n => ({ code: '@' + at[1] + n, desc: tr('бот'), value: `@${at[1]}${n} ` }))
     }
     const word = v.match(/(\S{2,})$/)
     if (!word || word[1].startsWith('@')) return []
@@ -754,9 +780,10 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
       class: 'it' + (i === sIdx ? ' on' : ''),
       onpointerdown: (e) => { e.preventDefault(); complete(it) }
     }, h('code', null, it.code), it.desc ? h('span', null, it.desc) : null))
-    suggest.replaceChildren(...(noteMain ? [h('div', { class: 'it note' }, noteMain, noteSub ? h('span', null, noteSub) : null)] : []), ...rows)
+    suggestList.replaceChildren(...(noteMain ? [h('div', { class: 'it note' }, noteMain, noteSub ? h('span', null, noteSub) : null)] : []), ...rows)
     suggest.classList.remove('hidden')
     rows[sIdx]?.scrollIntoView({ block: 'nearest' })
+    updateSuggestEdges()
   }
   function complete (it) {
     input.value = it.value
@@ -808,20 +835,23 @@ function createConsole ({ placeholder, onSubmit, historyKey, global = false, bot
   })
 
   const box = h('div', { class: 'box' }, h('span', { class: 'caret' }, '›'), input,
-    h('button', { class: 'icon-btn sm', title: 'Отправить', onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send')))
+    h('button', { class: 'icon-btn sm', title: tr('Отправить'), onclick: () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' })) }, icon('send')))
   const el = h('div', { class: 'console-inner', style: { display: 'contents' } },
     log,
     h('div', { class: 'prompt' }, suggest, box)
   )
   return { el, append, setEntries, focus: () => input.focus(), input }
 }
-const findCommand = (q) => S.commands.find(c => c.name === q || c.aliases.includes(q))
+const findCommand = (q) => {
+  const command = S.commands.find(c => c.name === q || c.aliases.includes(q))
+  return command && localizeCommand(command)
+}
 
 // Arguments of a usage line like ".transfer <предмет> <ник покупателя> [chests [радиус] [reset]]".
 // Usages with alternatives ("|") or free text are not counted.
 function usageSpec (usage) {
   const rest = usage.replace(/^\.\S+\s*/, '')
-  if (rest.includes('|') || /<текст>|<значение>/.test(rest)) return null
+  if (rest.includes('|') || /<(текст|значение|text|value)>/.test(rest)) return null
   const tokens = []; let depth = 0
   for (const m of rest.matchAll(/<[^>]*>|\[|\]|[^\s[\]<>]+/g)) {
     if (m[0] === '[') depth++
@@ -835,15 +865,14 @@ function usageView (c, spec, cur) {
     h('span', { class: 'arg' + (i === cur ? ' cur' : '') + (t.required ? '' : ' opt') }, t.required ? t.text : `[${t.text}]`)]).flat())
 }
 
-const plural = (n) => (n % 10 === 1 && n % 100 !== 11) ? '' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'а' : 'ов'
 
 // ============================================================
 // Rotation control (compass + pitch). Angles are F3-style:
 // yaw 0 = south, 90 = west, ±180 = north, -90 = east; pitch -90 = up, 90 = down.
 // ============================================================
 const normYaw = (y) => ((((y + 180) % 360) + 360) % 360) - 180
-const CARDINALS = ['Ю', 'ЮЗ', 'З', 'СЗ', 'С', 'СВ', 'В', 'ЮВ']
-const cardinal = (yaw) => CARDINALS[Math.round((((yaw % 360) + 360) % 360) / 45) % 8]
+const CARDINALS = () => [tr('Ю'), tr('ЮЗ'), tr('З'), tr('СЗ'), tr('С'), tr('СВ'), tr('В'), tr('ЮВ')]
+const cardinal = (yaw) => CARDINALS()[Math.round((((yaw % 360) + 360) % 360) / 45) % 8]
 
 function compassSvg () {
   let ticks = ''
@@ -856,7 +885,7 @@ function compassSvg () {
   const t = document.createElement('template')
   t.innerHTML = `<svg class="compass" viewBox="-60 -60 120 120">
     <circle class="ring" r="57"/>${ticks}
-    <text class="n" x="0" y="-35">С</text><text x="35" y="0">В</text><text x="0" y="35">Ю</text><text x="-35" y="0">З</text>
+    <text class="n" x="0" y="-35">${tr('С')}</text><text x="35" y="0">${tr('В')}</text><text x="0" y="35">${tr('Ю')}</text><text x="-35" y="0">${tr('З')}</text>
     <g class="needle"><line class="tail" x1="0" y1="0" x2="0" y2="14"/><line x1="0" y1="0" x2="0" y2="-40"/><circle r="3.5"/></g>
   </svg>`
   return t.content.firstChild
@@ -866,10 +895,10 @@ function createRotation ({ onLook, onTurn, live = true }) {
   let yaw = 0; let pitch = 0; let dragging = false; let lastSent = 0; let timer = null
   const svg = compassSvg()
   const needle = svg.querySelector('.needle')
-  const yawIn = h('input', { class: 'input', placeholder: 'yaw', title: 'Yaw (как в F3)' })
-  const pitchIn = h('input', { class: 'input', placeholder: 'pitch', title: 'Pitch (как в F3)' })
+  const yawIn = h('input', { class: 'input', placeholder: 'yaw', title: tr('Yaw (как в F3)') })
+  const pitchIn = h('input', { class: 'input', placeholder: 'pitch', title: tr('Pitch (как в F3)') })
   const range = h('input', { type: 'range', min: -90, max: 90, step: 1, value: 0 })
-  const now = h('div', { class: 'rot-now' + (live ? '' : ' hint') }, live ? '—' : 'Тяни стрелку или задай углы (как в F3)')
+  const now = h('div', { class: 'rot-now' + (live ? '' : ' hint') }, live ? '—' : tr('Тяни стрелку или задай углы (как в F3)'))
 
   const paint = () => {
     needle.setAttribute('transform', `rotate(${yaw + 180})`)
@@ -911,18 +940,18 @@ function createRotation ({ onLook, onTurn, live = true }) {
     svg,
     h('div', { class: 'rot-side' },
       now,
-      h('div', { class: 'rot-inputs' }, yawIn, pitchIn, h('button', { class: 'btn sm primary', onclick: apply }, 'Повернуть')),
-      h('div', { class: 'pitch' }, h('span', null, 'вверх'), range, h('span', null, 'вниз')),
+      h('div', { class: 'rot-inputs' }, yawIn, pitchIn, h('button', { class: 'btn sm primary', onclick: apply }, tr('Повернуть'))),
+      h('div', { class: 'pitch' }, h('span', null, tr('вверх')), range, h('span', null, tr('вниз'))),
       h('div', { class: 'presets' },
-        h('button', { class: 'btn sm', onclick: set(180, null) }, 'С'),
-        h('button', { class: 'btn sm', onclick: set(-90, null) }, 'В'),
-        h('button', { class: 'btn sm', onclick: set(0, null) }, 'Ю'),
-        h('button', { class: 'btn sm', onclick: set(90, null) }, 'З'),
-        h('button', { class: 'btn sm', onclick: turn(-45), title: 'Повернуться влево на 45°' }, '−45°'),
-        h('button', { class: 'btn sm', onclick: turn(45), title: 'Повернуться вправо на 45°' }, '+45°'),
-        h('button', { class: 'btn sm', onclick: set(null, -90) }, 'Вверх'),
-        h('button', { class: 'btn sm', onclick: set(null, 0) }, 'Прямо'),
-        h('button', { class: 'btn sm', onclick: set(null, 90) }, 'Вниз'))))
+        h('button', { class: 'btn sm', onclick: set(180, null) }, tr('С')),
+        h('button', { class: 'btn sm', onclick: set(-90, null) }, tr('В')),
+        h('button', { class: 'btn sm', onclick: set(0, null) }, tr('Ю')),
+        h('button', { class: 'btn sm', onclick: set(90, null) }, tr('З')),
+        h('button', { class: 'btn sm', onclick: turn(-45), title: tr('Повернуться влево на 45°') }, '−45°'),
+        h('button', { class: 'btn sm', onclick: turn(45), title: tr('Повернуться вправо на 45°') }, '+45°'),
+        h('button', { class: 'btn sm', onclick: set(null, -90) }, tr('Вверх')),
+        h('button', { class: 'btn sm', onclick: set(null, 0) }, tr('Прямо')),
+        h('button', { class: 'btn sm', onclick: set(null, 90) }, tr('Вниз')))))
   paint()
 
   return {
@@ -939,13 +968,13 @@ function createRotation ({ onLook, onTurn, live = true }) {
   }
 }
 
-const HOLD_BTNS = [
-  ['lmb', 'ЛКМ', 'Ломать/бить то, куда смотрит (как зажатая ЛКМ)'],
-  ['rmb', 'ПКМ', 'Использовать предмет / ставить блок (как зажатая ПКМ)'],
-  ['forward', 'W', 'Идти вперёд'],
-  ['sneak', 'Shift', 'Красться'],
-  ['jump', 'Пробел', 'Прыгать'],
-  ['sprint', 'Спринт', 'Бежать']
+const HOLD_BTNS = () => [
+  ['lmb', tr('ЛКМ'), tr('Ломать/бить то, куда смотрит (как зажатая ЛКМ)')],
+  ['rmb', tr('ПКМ'), tr('Использовать предмет / ставить блок (как зажатая ПКМ)')],
+  ['forward', 'W', tr('Идти вперёд')],
+  ['sneak', 'Shift', tr('Красться')],
+  ['jump', tr('Пробел'), tr('Прыгать')],
+  ['sprint', tr('Спринт'), tr('Бежать')]
 ]
 
 // ============================================================
@@ -959,22 +988,22 @@ function renderBot (id) {
   const tb = $('#topbar')
   const tHead = headImg(b, 'sm')
   const tTitle = h('span', { class: 'title' }, botName(b))
-  const tPill = h('span', { class: 'pill' }, h('span', { class: 'dot ' + b.state }), h('span', null, STATE_LABEL[b.state]))
+  const tPill = h('span', { class: 'pill' }, h('span', { class: 'dot ' + b.state }), h('span', null, STATE_LABEL()[b.state]))
   const tCrumb = h('span', { class: 'crumb' }, serverStr(b.server))
   const tPower = h('button', { class: 'btn sm', onclick: () => togglePower(S.bots.get(id)) })
   tb.replaceChildren(tHead, tTitle, tPill, tCrumb, h('div', { class: 'spacer' }), tPower,
-    h('button', { class: 'icon-btn sm', title: 'Ещё', onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); botMenu(S.bots.get(id), r.left - 150, r.bottom + 6) } }, icon('more')))
+    h('button', { class: 'icon-btn sm', title: tr('Ещё'), onclick: (e) => { const r = e.currentTarget.getBoundingClientRect(); botMenu(S.bots.get(id), r.left - 150, r.bottom + 6, { showPower: false }) } }, icon('more')))
 
   // console
   const con = createConsole({
-    placeholder: 'Сообщение в чат или .команда  ·  Tab — дополнить, стрелки — история',
+    placeholder: tr('Сообщение в чат или .команда  ·  Tab — дополнить, стрелки — история'),
     historyKey: 'bot',
     botId: id,
     onSubmit: (line) => act('bot.command', { id, line }).catch(() => {})
   })
   const consoleCard = h('div', { class: 'card console' },
-    h('div', { class: 'card-head' }, h('h3', null, 'Консоль'), h('div', { class: 'spacer' }),
-      h('button', { class: 'btn ghost sm', onclick: () => { act('bot.clearLogs', { id }); S.logs.set(id, []); con.setEntries([]) } }, icon('clear'), 'Очистить')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Консоль')), h('div', { class: 'spacer' }),
+      h('button', { class: 'btn ghost sm', onclick: () => { act('bot.clearLogs', { id }); S.logs.set(id, []); con.setEntries([]) } }, icon('clear'), tr('Очистить'))),
     con.el)
 
   // side column
@@ -986,36 +1015,36 @@ function renderBot (id) {
   const go = () => {
     const xs = [gx.value.trim(), gy.value.trim(), gz.value.trim()]
     const parts = xs[1] ? xs : [xs[0], xs[2]]
-    if (parts.some(p => p === '')) { toast('Укажи X и Z (Y можно пропустить)', true); return }
+    if (parts.some(p => p === '')) { toast(tr('Укажи X и Z (Y можно пропустить)'), true); return }
     act('bot.command', { id, line: `.goto ${parts.join(' ')}` })
   }
   coordFields([gx, gy, gz], go)
   const cmd = (line) => () => act('bot.command', { id, line })
   const actionsCard = h('div', { class: 'card' },
-    h('div', { class: 'card-head' }, h('h3', null, 'Действия'), h('div', { class: 'spacer' }), h('span', { class: 'task-chip', id: 'task-chip' })),
-    h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, 'Идти')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Действия')), h('div', { class: 'spacer' }), h('span', { class: 'task-chip', id: 'task-chip' })),
+    h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, tr('Идти'))),
     h('div', { class: 'quick' },
-      h('button', { class: 'btn sm', onclick: cmd('.stop') }, icon('stop'), 'Стоп'),
-      h('button', { class: 'btn sm', onclick: cmd('.jump') }, 'Прыжок'),
-      h('button', { class: 'btn sm', onclick: cmd('.sneak') }, 'Присесть'),
-      h('button', { class: 'btn sm', onclick: cmd('.break') }, 'Сломать блок'),
-      h('button', { class: 'btn sm', onclick: cmd('.eat') }, 'Съесть'),
-      h('button', { class: 'btn sm', onclick: cmd('.use') }, 'ПКМ'),
-      h('button', { class: 'btn sm', onclick: cmd('.drop') }, 'Выбросить'),
-      h('button', { class: 'btn sm', onclick: () => { const p = S.bots.get(id)?.live?.pos; if (p) { gx.value = Math.floor(p.x); gy.value = Math.floor(p.y); gz.value = Math.floor(p.z) } } }, 'Мои коорд.')
+      h('button', { class: 'btn sm', onclick: cmd('.stop') }, icon('stop'), tr('Стоп')),
+      h('button', { class: 'btn sm', onclick: cmd('.jump') }, tr('Прыжок')),
+      h('button', { class: 'btn sm', onclick: cmd('.sneak') }, tr('Присесть')),
+      h('button', { class: 'btn sm', onclick: cmd('.break') }, tr('Сломать блок')),
+      h('button', { class: 'btn sm', onclick: cmd('.eat') }, tr('Съесть')),
+      h('button', { class: 'btn sm', onclick: cmd('.use') }, tr('ПКМ')),
+      h('button', { class: 'btn sm', onclick: cmd('.drop') }, tr('Выбросить')),
+      h('button', { class: 'btn sm', onclick: () => { const p = S.bots.get(id)?.live?.pos; if (p) { gx.value = Math.floor(p.x); gy.value = Math.floor(p.y); gz.value = Math.floor(p.z) } } }, tr('Мои коорд.'))
     ),
     h('div', { class: 'holds' },
-      h('span', { class: 'lbl' }, 'Зажать:'),
-      HOLD_BTNS.map(([k, t, tip]) => h('button', {
+      h('span', { class: 'lbl' }, tr('Зажать:')),
+      HOLD_BTNS().map(([k, t, tip]) => h('button', {
         class: 'btn sm toggle',
         title: tip,
         dataset: { key: k },
         onclick: () => act('bot.hold', { id, key: k, on: !(S.bots.get(id)?.holds || []).includes(k) })
       }, t)),
-      h('button', { class: 'btn sm ghost', onclick: cmd('.release') }, 'Отпустить всё')))
+      h('button', { class: 'btn sm ghost', onclick: cmd('.release') }, tr('Отпустить всё'))))
 
   const rot = createRotation({ onLook: (yaw, pitch) => api.call('bot.look', { id, yaw, pitch }).catch(() => {}) })
-  const rotCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', null, 'Поворот головы')), rot.el)
+  const rotCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', null, tr('Поворот головы'))), rot.el)
 
   const dialogCard = h('div', { class: 'card screen hidden' })
   const windowCard = h('div', { class: 'card screen hidden' })
@@ -1048,9 +1077,9 @@ function updateBotView () {
   // topbar
   refreshHead(V.tHead, b)
   V.tTitle.textContent = botTitle(b)
-  V.tPill.replaceChildren(h('span', { class: 'dot ' + b.state }), h('span', null, b.state === 'reconnecting' ? subText(b) : STATE_LABEL[b.state]))
-  V.tCrumb.textContent = `${serverStr(b.server)}${b.server.custom ? '' : ' · глобальный'}${b.live ? ' · ' + b.live.version : ''}`
-  V.tPower.replaceChildren(icon(isActive(b) ? 'power' : 'plug'), isActive(b) ? 'Отключить' : 'Подключить')
+  V.tPill.replaceChildren(h('span', { class: 'dot ' + b.state }), h('span', null, b.state === 'reconnecting' ? subText(b) : STATE_LABEL()[b.state]))
+  V.tCrumb.textContent = `${serverStr(b.server)}${b.server.custom ? '' : tr(' · глобальный')}${b.live ? ' · ' + b.live.version : ''}`
+  V.tPower.replaceChildren(icon(isActive(b) ? 'power' : 'plug'), isActive(b) ? tr('Отключить') : tr('Подключить'))
   V.tPower.className = 'btn sm' + (isActive(b) ? '' : ' primary')
   V.tPower.disabled = !!b.accountIssue
 
@@ -1071,50 +1100,50 @@ function renderStatus (b) {
   const who = h('div', { class: 'who-card' }, headImg(b, 'lg'),
     h('div', { class: 'meta' },
       h('div', { class: 'n' }, botName(b)),
-      h('div', { class: 's' }, TYPE_LABEL[b.type] || b.type)))
+      h('div', { class: 's' }, TYPE_LABEL()[b.type] || b.type)))
   const parts = [who]
   if (b.accountIssue) parts.push(h('div', { class: 'offline-state' },
-    h('div', { class: 'err' }, '! Утерян / украден — вход остановлен для этого аккаунта'),
+    h('div', { class: 'err' }, tr('! Утерян / украден — вход остановлен для этого аккаунта')),
     h('div', { class: 'muted' }, b.accountIssue.reason),
-    h('button', { class: 'btn sm', onclick: () => act('bot.update', { id: b.id, patch: { accountIssue: null } }) }, 'Снять отметку')))
+    h('button', { class: 'btn sm', onclick: () => act('bot.update', { id: b.id, patch: { accountIssue: null } }) }, tr('Снять отметку'))))
 
   if (b.authCode) {
     parts.push(h('div', { class: 'auth-banner' },
-      h('div', { class: 'muted' }, 'Нужен вход в Microsoft. Открой страницу и введи код:'),
+      h('div', { class: 'muted' }, tr('Нужен вход в Microsoft. Открой страницу и введи код:')),
       h('div', { class: 'code' }, b.authCode.code),
       h('div', { class: 'row' },
-        h('button', { class: 'btn sm', onclick: () => copy(b.authCode.code) }, icon('copy'), 'Код'),
-        h('a', { class: 'btn sm primary', href: b.authCode.url, target: '_blank', rel: 'noreferrer' }, icon('ext'), 'Открыть'))))
+        h('button', { class: 'btn sm', onclick: () => copy(b.authCode.code) }, icon('copy'), tr('Код')),
+        h('a', { class: 'btn sm primary', href: b.authCode.url, target: '_blank', rel: 'noreferrer' }, icon('ext'), tr('Открыть')))))
   }
 
   if (b.state === 'online' && b.live) {
     const L = b.live
     parts.push(
       h('div', { class: 'meters' },
-        meter('Здоровье', L.health, 20),
-        meter('Голод', L.food, 20)),
-      h('div', { class: 'xp', title: `Уровень ${L.level}` }, h('i', { style: { width: (L.xpProgress * 100).toFixed(1) + '%' } })),
+        meter(tr('Здоровье'), L.health, 20),
+        meter(tr('Голод'), L.food, 20)),
+      h('div', { class: 'xp', title: tr('Уровень {0}', L.level) }, h('i', { style: { width: (L.xpProgress * 100).toFixed(1) + '%' } })),
       h('dl', { class: 'kv' },
-        h('dt', null, 'Позиция'), h('dd', { class: 'copy', title: 'Скопировать', onclick: () => copy(`${Math.floor(L.pos.x)} ${Math.floor(L.pos.y)} ${Math.floor(L.pos.z)}`) }, `${f1(L.pos.x)}  ${f1(L.pos.y)}  ${f1(L.pos.z)}`),
-        h('dt', null, 'Измерение'), h('dd', null, String(L.dimension || '—').replace('minecraft:', '')),
-        h('dt', null, 'Режим'), h('dd', null, L.gameMode || '—'),
-        h('dt', null, 'Уровень'), h('dd', null, String(L.level)),
-        h('dt', null, 'Пинг'), h('dd', null, L.ping != null ? `${L.ping} ms` : '—'),
-        h('dt', null, 'Игроков'), h('dd', null, String(L.players)),
-        L.actionBar ? [h('dt', null, 'Экшн-бар'), h('dd', { title: L.actionBar }, L.actionBar)] : null,
-        L.setbacks ? [h('dt', { title: 'Коррекции позиции до 6 блоков за 10 секунд. Причина неизвестна: возможны античит, команда или плагин сервера.' }, 'Коррекции'), h('dd', null, `${L.setbacks} за 10 с`)] : null,
-        h('dt', null, 'Версия'), h('dd', null, L.version)))
+        h('dt', null, tr('Позиция')), h('dd', { class: 'copy', title: tr('Скопировать'), onclick: () => copy(`${Math.floor(L.pos.x)} ${Math.floor(L.pos.y)} ${Math.floor(L.pos.z)}`) }, `${f1(L.pos.x)}  ${f1(L.pos.y)}  ${f1(L.pos.z)}`),
+        h('dt', null, tr('Измерение')), h('dd', null, String(L.dimension || '—').replace('minecraft:', '')),
+        h('dt', null, tr('Режим')), h('dd', null, L.gameMode || '—'),
+        h('dt', null, tr('Уровень')), h('dd', null, String(L.level)),
+        h('dt', null, tr('Пинг')), h('dd', null, L.ping != null ? `${L.ping} ms` : '—'),
+        h('dt', null, tr('Игроков')), h('dd', null, String(L.players)),
+        L.actionBar ? [h('dt', null, tr('Экшн-бар')), h('dd', { title: L.actionBar }, L.actionBar)] : null,
+        L.setbacks ? [h('dt', { title: tr('Коррекции позиции до 6 блоков за 10 секунд. Причина неизвестна: возможны античит, команда или плагин сервера.') }, tr('Коррекции')), h('dd', null, tr('{0} за 10 с', L.setbacks))] : null,
+        h('dt', null, tr('Версия')), h('dd', null, L.version)))
   } else {
     const st = h('div', { class: 'offline-state' })
     if (b.error && b.state !== 'connecting') st.append(h('div', { class: 'err' }, b.error))
-    if (b.state === 'connecting') st.append(h('div', { class: 'row muted' }, h('span', { class: 'spin' }), b.authCode ? 'Ждёт вход в Microsoft…' : 'Подключение…'))
+    if (b.state === 'connecting') st.append(h('div', { class: 'row muted' }, h('span', { class: 'spin' }), b.authCode ? tr('Ждёт вход в Microsoft…') : tr('Подключение…')))
     else if (b.state === 'reconnecting') st.append(h('div', { class: 'row muted' }, h('span', { class: 'spin' }), subText(b)))
     st.append(h('dl', { class: 'kv', style: { padding: '0' } },
-      h('dt', null, 'Сервер'), h('dd', null, serverStr(b.server)),
-      h('dt', null, 'Версия'), h('dd', null, b.server.version === 'auto' ? 'авто' : b.server.version),
-      b.tokenExpiresAt ? [h('dt', null, 'Токен до'), h('dd', null, new Date(b.tokenExpiresAt).toLocaleString())] : null))
-    if (b.state === 'queued') st.append(h('div', { class: 'muted' }, 'В очереди: ожидает завершения входа предыдущего аккаунта'))
-    if (!isActive(b) && !b.accountIssue) st.append(h('button', { class: 'btn primary', onclick: () => act('bot.connect', { id: b.id }) }, icon('plug'), 'Подключить'))
+      h('dt', null, tr('Сервер')), h('dd', null, serverStr(b.server)),
+      h('dt', null, tr('Версия')), h('dd', null, b.server.version === 'auto' ? tr('авто') : b.server.version),
+      b.tokenExpiresAt ? [h('dt', null, tr('Токен до')), h('dd', null, new Date(b.tokenExpiresAt).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'ru-RU'))] : null))
+    if (b.state === 'queued') st.append(h('div', { class: 'muted' }, tr('В очереди: ожидает завершения входа предыдущего аккаунта')))
+    if (!isActive(b) && !b.accountIssue) st.append(h('button', { class: 'btn primary', onclick: () => act('bot.connect', { id: b.id }) }, icon('plug'), tr('Подключить')))
     parts.push(st)
   }
   card.replaceChildren(...parts)
@@ -1141,8 +1170,8 @@ function renderDialog (b) {
   V.dialogKey = key
   if (!d) { card.classList.add('hidden'); card.replaceChildren(); return }
   card.replaceChildren(
-    h('div', { class: 'card-head' }, h('h3', null, 'Диалог сервера'), h('div', { class: 'spacer' }),
-      d.canEscape ? h('button', { class: 'btn ghost sm', title: 'Как Esc в игре', onclick: () => act('bot.dialogClose', { id: b.id }) }, 'Закрыть') : null),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Диалог сервера')), h('div', { class: 'spacer' }),
+      d.canEscape ? h('button', { class: 'btn ghost sm', title: tr('Как Esc в игре'), onclick: () => act('bot.dialogClose', { id: b.id }) }, tr('Закрыть')) : null),
     dialogBody(b.id, d)
   )
   card.classList.remove('hidden')
@@ -1207,7 +1236,7 @@ function fillTp (dock, id, full) {
   const more = tpQueue.size - 1
   if (!full) {
     const count = inner.querySelector('.tp-count')
-    count.textContent = more > 0 ? `ещё ${more}` : ''
+    count.textContent = more > 0 ? tr('ещё {0}', more) : ''
     count.classList.toggle('hidden', more <= 0)
     if (inner.dataset.waiting === String(!!d.waiting)) return
     inner.dataset.waiting = String(!!d.waiting)
@@ -1219,9 +1248,9 @@ function fillTp (dock, id, full) {
     h('div', { class: 'card-head' },
       headImg(b, 'sm'),
       h('h3', null, botName(b)),
-      h('span', { class: 'tp-count' + (more > 0 ? '' : ' hidden') }, more > 0 ? `ещё ${more}` : ''),
+      h('span', { class: 'tp-count' + (more > 0 ? '' : ' hidden') }, more > 0 ? tr('ещё {0}', more) : ''),
       h('div', { class: 'spacer' }),
-      d.canEscape ? h('button', { class: 'btn ghost sm', title: 'Как Esc в игре', onclick: () => act('bot.dialogClose', { id }) }, 'Закрыть') : null),
+      d.canEscape ? h('button', { class: 'btn ghost sm', title: tr('Как Esc в игре'), onclick: () => act('bot.dialogClose', { id }) }, tr('Закрыть')) : null),
     dialogBody(id, d)
   )
 }
@@ -1284,7 +1313,7 @@ function dialogBody (id, d) {
       getters.push(() => [i.key, Number(r.value)])
       return h('div', { class: 'field' }, h('span', null, i.label), h('div', { class: 'dlg-range' }, r, out))
     }
-    return h('div', { class: 'muted' }, `${i.label}: (неподдерживаемое поле)`)
+    return h('div', { class: 'muted' }, tr('{0}: (неподдерживаемое поле)', i.label))
   })
   const values = () => Object.fromEntries(getters.map(g => g()))
 
@@ -1293,7 +1322,7 @@ function dialogBody (id, d) {
     d.body.filter(t => t.trim()).length ? h('div', { class: 'dlg-body' }, d.body.filter(t => t.trim()).join('\n\n')) : null,
     inputs.length ? h('div', { class: 'dlg-inputs' }, inputs) : null,
     d.waiting
-      ? h('div', { class: 'dlg-wait' }, h('span', { class: 'spin' }), 'Ждём ответа сервера…')
+      ? h('div', { class: 'dlg-wait' }, h('span', { class: 'spin' }), tr('Ждём ответа сервера…'))
       : h('div', { class: 'dlg-buttons' }, d.buttons.map((btn, n) => h('button', {
         class: 'btn' + (n === 0 ? ' primary' : ''),
         title: btn.tooltip || null,
@@ -1313,12 +1342,12 @@ function renderWindow (id, inv) {
     rows.push(h('div', { class: 'inv-grid' }, Array.from({ length: Math.min(9, w.size - r * 9) }, (_, k) => guiSlotEl(id, w.slots[r * 9 + k], r * 9 + k, inv.version))))
   }
   card.replaceChildren(
-    h('div', { class: 'card-head' }, h('h3', null, 'Открыто меню'), h('div', { class: 'spacer' }),
-      h('button', { class: 'btn ghost sm', onclick: () => act('bot.windowClose', { id }) }, 'Закрыть')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Открыто меню')), h('div', { class: 'spacer' }),
+      h('button', { class: 'btn ghost sm', onclick: () => act('bot.windowClose', { id }) }, tr('Закрыть'))),
     h('div', { class: 'gui' },
       h('div', { class: 'dlg-title', style: { marginBottom: '10px' } }, w.title),
       rows,
-      h('div', { class: 'inv-hint' }, 'Клик — ЛКМ · правый клик — ПКМ · ', h('kbd', null, 'Shift'), '+клик · в консоли: .gui click <№|текст>')))
+      h('div', { class: 'inv-hint' }, tr('Клик — ЛКМ · правый клик — ПКМ · '), h('kbd', null, 'Shift'), tr('+клик · в консоли: .gui click <№|текст>'))))
   card.classList.remove('hidden')
 }
 
@@ -1345,7 +1374,7 @@ function guiSlotEl (id, it, slot, version) {
 }
 
 // ---------- inventory ----------
-const ARMOR = [[5, 'head', 'Шлем'], [6, 'torso', 'Нагрудник'], [7, 'legs', 'Поножи'], [8, 'feet', 'Ботинки']]
+const ARMOR = () => [[5, 'head', tr('Шлем')], [6, 'torso', tr('Нагрудник')], [7, 'legs', tr('Поножи')], [8, 'feet', tr('Ботинки')]]
 
 function armorDest (name) {
   if (/helmet|_head$|_skull$|carved_pumpkin|turtle_helmet/.test(name)) return 'head'
@@ -1375,7 +1404,7 @@ function renderInventory () {
       dropZone.classList.remove('over')
       if (drag && drag.id === id) act('bot.drop', { id, slot: drag.slot, all: true })
     }
-  }, icon('drop'), 'Отпусти здесь — выбросить стак')
+  }, icon('drop'), tr('Отпусти здесь — выбросить стак'))
   const hotbar = h('div', {
     class: 'inv-grid inv-hotbar',
     onwheel: (e) => {
@@ -1387,22 +1416,22 @@ function renderInventory () {
   }, Array.from({ length: 9 }, (_, k) => mk(36 + k, { num: k + 1 })))
   const wrap = h('div', { class: 'inv' + (inv ? '' : ' off') },
     h('div', { class: 'inv-top' },
-      h('div', null, h('div', { class: 'inv-label' }, 'Броня'), h('div', { class: 'inv-armor' }, ARMOR.map(([i, , t]) => mk(i, { title: t })))),
+      h('div', null, h('div', { class: 'inv-label' }, tr('Броня')), h('div', { class: 'inv-armor' }, ARMOR().map(([i, , t]) => mk(i, { title: t })))),
       h('div', { class: 'spacer' }),
-      h('div', null, h('div', { class: 'inv-label' }, 'Левая рука'), h('div', { class: 'inv-off' }, mk(45, { title: 'Левая рука' })))),
+      h('div', null, h('div', { class: 'inv-label' }, tr('Левая рука')), h('div', { class: 'inv-off' }, mk(45, { title: tr('Левая рука') })))),
     h('div', { class: 'inv-grid' }, Array.from({ length: 27 }, (_, k) => mk(9 + k))),
     hotbar,
     inv ? dropZone : null,
     inv
-      ? h('div', { class: 'inv-hint' }, 'Тащи предмет мышкой, чтобы переложить · ', h('kbd', null, 'Shift'), '+клик — быстро перекинуть · наведи и жми ',
-        h('kbd', null, '1'), '–', h('kbd', null, '9'), ' — в слот хотбара, ', h('kbd', null, 'Q'), ' — выбросить · колёсико над хотбаром — сменить слот')
-      : h('div', { class: 'inv-note' }, 'Инвентарь виден, когда бот в сети.')
+      ? h('div', { class: 'inv-hint' }, tr('Тащи предмет мышкой, чтобы переложить · '), h('kbd', null, 'Shift'), tr('+клик — быстро перекинуть · наведи и жми '),
+        h('kbd', null, '1'), '–', h('kbd', null, '9'), tr(' — в слот хотбара, '), h('kbd', null, 'Q'), tr(' — выбросить · колёсико над хотбаром — сменить слот'))
+      : h('div', { class: 'inv-note' }, tr('Инвентарь виден, когда бот в сети.'))
   )
   V.invWrap = wrap
   renderWindow(id, inv)
   const count = slots.filter((s, i) => s && i >= 9 && i <= 44).length
   V.invCard.replaceChildren(
-    h('div', { class: 'card-head' }, h('h3', null, 'Инвентарь'), h('div', { class: 'spacer' }), inv ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, `${count}/36 · ПКМ — действия`) : null),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Инвентарь')), h('div', { class: 'spacer' }), inv ? h('span', { class: 'muted', style: { fontSize: '11.5px' } }, tr('{0}/36 · ПКМ — действия', count)) : null),
     wrap)
 }
 
@@ -1456,7 +1485,7 @@ function slotEl (id, it, index, version, { held, num, title } = {}) {
       h('b', null, it.displayName),
       ...(it.lore || []).map(l => h('div', { class: 'lore' }, l)),
       h('div', { class: 'id' }, `minecraft:${it.name}${it.count > 1 ? ' × ' + it.count : ''}`),
-      it.maxDur ? h('div', null, `Прочность: ${it.maxDur - it.used}/${it.maxDur}`) : null,
+      it.maxDur ? h('div', null, tr('Прочность: {0}/{1}', it.maxDur - it.used, it.maxDur)) : null,
       ...(it.enchants || []).map(e => h('div', { class: 'en' }, e.replace(/_/g, ' ')))
     ]))
     el.addEventListener('mouseleave', hideTip)
@@ -1495,7 +1524,7 @@ document.addEventListener('keydown', (e) => {
 function slotMenu (id, it, index, x, y) {
   const dest = armorDest(it.name)
   const hbRow = h('div', null,
-    h('div', { class: 'lbl' }, 'Положить в слот хотбара и взять'),
+    h('div', { class: 'lbl' }, tr('Положить в слот хотбара и взять')),
     h('div', { class: 'hb-row' }, Array.from({ length: 9 }, (_, k) => h('button', {
       onclick: async () => {
         closeMenu()
@@ -1507,13 +1536,13 @@ function slotMenu (id, it, index, x, y) {
     { label: it.displayName },
     { el: hbRow },
     '-',
-    { text: index >= 36 && index <= 44 ? 'Выбрать слот' : 'Взять в руку', icon: 'hand', run: () => act('bot.equip', { id, slot: index, dest: 'hand' }) },
-    { text: 'В левую руку', icon: 'hand', run: () => act('bot.equip', { id, slot: index, dest: 'off-hand' }) }
+    { text: index >= 36 && index <= 44 ? tr('Выбрать слот') : tr('Взять в руку'), icon: 'hand', run: () => act('bot.equip', { id, slot: index, dest: 'hand' }) },
+    { text: tr('В левую руку'), icon: 'hand', run: () => act('bot.equip', { id, slot: index, dest: 'off-hand' }) }
   ]
-  if (dest && !(index >= 5 && index <= 8)) items.push({ text: 'Надеть', icon: 'shirt', run: () => act('bot.equip', { id, slot: index, dest }) })
+  if (dest && !(index >= 5 && index <= 8)) items.push({ text: tr('Надеть'), icon: 'shirt', run: () => act('bot.equip', { id, slot: index, dest }) })
   items.push('-')
-  items.push({ text: 'Выбросить стак', icon: 'drop', run: () => act('bot.drop', { id, slot: index, all: true }) })
-  if (it.count > 1) items.push({ text: 'Выбросить 1', icon: 'drop', run: () => act('bot.drop', { id, slot: index, all: false }) })
+  items.push({ text: tr('Выбросить стак'), icon: 'drop', run: () => act('bot.drop', { id, slot: index, all: true }) })
+  if (it.count > 1) items.push({ text: tr('Выбросить 1'), icon: 'drop', run: () => act('bot.drop', { id, slot: index, all: false }) })
   openMenu(x, y, items)
 }
 
@@ -1523,21 +1552,21 @@ function slotMenu (id, it, index, x, y) {
 function renderGlobal () {
   const tb = $('#topbar')
   tb.replaceChildren(
-    h('span', { class: 'title' }, 'Общая консоль'),
+    h('span', { class: 'title' }, tr('Общая консоль')),
     h('span', { class: 'pill', id: 'g-pill' }),
     h('div', { class: 'spacer' }),
-    h('button', { class: 'btn sm', onclick: () => act('bots.connectAll', { ids: S.targets.size ? [...S.targets] : undefined }, 'Подключаю…') }, icon('plug'), S.targets.size ? 'Подключить выбранных' : 'Подключить всех'),
-    h('button', { class: 'btn sm', onclick: disconnectTargets }, icon('power'), 'Отключить'))
+    h('button', { class: 'btn sm', onclick: () => act('bots.connectAll', { ids: S.targets.size ? [...S.targets] : undefined }, tr('Подключаю…')) }, icon('plug'), S.targets.size ? tr('Подключить выбранных') : tr('Подключить всех')),
+    h('button', { class: 'btn sm', onclick: disconnectTargets }, icon('power'), tr('Отключить')))
 
   const con = createConsole({
-    placeholder: 'Команда всем выбранным: .goto 100 64 -20, .break, .slot 2, привет…',
+    placeholder: tr('Команда всем выбранным: .goto 100 64 -20, .break, .slot 2, привет…'),
     historyKey: 'global',
     global: true,
     onSubmit: (line) => act('global.command', { line, targets: S.targets.size ? [...S.targets] : null }).catch(() => {})
   })
   const consoleCard = h('div', { class: 'card console' },
-    h('div', { class: 'card-head' }, h('h3', null, 'Все боты'), h('div', { class: 'spacer' }),
-      h('button', { class: 'btn ghost sm', onclick: () => { act('global.clear'); S.glogs = []; con.setEntries([]) } }, icon('clear'), 'Очистить')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Все боты')), h('div', { class: 'spacer' }),
+      h('button', { class: 'btn ghost sm', onclick: () => { act('global.clear'); S.glogs = []; con.setEntries([]) } }, icon('clear'), tr('Очистить'))),
     con.el)
 
   const targetsCard = h('div', { class: 'card', id: 'targets-card' })
@@ -1549,27 +1578,27 @@ function renderGlobal () {
   const go = () => {
     const xs = [gx.value.trim(), gy.value.trim(), gz.value.trim()]
     const parts = xs[1] ? xs : [xs[0], xs[2]]
-    if (parts.some(p => p === '')) { toast('Укажи X и Z', true); return }
+    if (parts.some(p => p === '')) { toast(tr('Укажи X и Z'), true); return }
     send(`.goto ${parts.join(' ')}`)
   }
   coordFields([gx, gy, gz], go)
   const actionsCard = h('div', { class: 'card' },
-    h('div', { class: 'card-head' }, h('h3', null, 'Всем сразу')),
-    h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, 'Идти')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Всем сразу'))),
+    h('div', { class: 'goto' }, gx, gy, gz, h('button', { class: 'btn primary', onclick: go }, tr('Идти'))),
     h('div', { class: 'quick' },
-      h('button', { class: 'btn sm', onclick: () => send('.stop') }, icon('stop'), 'Стоп'),
-      h('button', { class: 'btn sm', onclick: () => send('.jump') }, 'Прыжок'),
-      h('button', { class: 'btn sm', onclick: () => send('.sneak') }, 'Присесть'),
-      h('button', { class: 'btn sm', onclick: () => send('.break') }, 'Сломать'),
-      h('button', { class: 'btn sm', onclick: () => send('.eat') }, 'Съесть'),
-      h('button', { class: 'btn sm', onclick: () => send('.status') }, 'Статус')),
+      h('button', { class: 'btn sm', onclick: () => send('.stop') }, icon('stop'), tr('Стоп')),
+      h('button', { class: 'btn sm', onclick: () => send('.jump') }, tr('Прыжок')),
+      h('button', { class: 'btn sm', onclick: () => send('.sneak') }, tr('Присесть')),
+      h('button', { class: 'btn sm', onclick: () => send('.break') }, tr('Сломать')),
+      h('button', { class: 'btn sm', onclick: () => send('.eat') }, tr('Съесть')),
+      h('button', { class: 'btn sm', onclick: () => send('.status') }, tr('Статус'))),
     h('div', { class: 'holds' },
-      h('span', { class: 'lbl' }, 'Слот:'),
+      h('span', { class: 'lbl' }, tr('Слот:')),
       h('div', { class: 'slot-nums' }, Array.from({ length: 9 }, (_, k) => h('button', { class: 'btn sm', onclick: () => send(`.slot ${k + 1}`) }, k + 1)))),
     h('div', { class: 'holds' },
-      h('span', { class: 'lbl' }, 'Зажать:'),
-      HOLD_BTNS.map(([k, t, tip]) => h('button', { class: 'btn sm', title: tip, onclick: () => send(`.hold ${k}`) }, t)),
-      h('button', { class: 'btn sm ghost', onclick: () => send('.release') }, 'Отпустить всё')))
+      h('span', { class: 'lbl' }, tr('Зажать:')),
+      HOLD_BTNS().map(([k, t, tip]) => h('button', { class: 'btn sm', title: tip, onclick: () => send(`.hold ${k}`) }, t)),
+      h('button', { class: 'btn sm ghost', onclick: () => send('.release') }, tr('Отпустить всё'))))
 
   const targets = () => S.targets.size ? [...S.targets] : null
   const rot = createRotation({
@@ -1577,7 +1606,7 @@ function renderGlobal () {
     onLook: (yaw, pitch) => api.call('global.look', { targets: targets(), yaw, pitch }).catch(() => {}),
     onTurn: (dy) => send(`.turn ${dy}`)
   })
-  const rotCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', null, 'Поворот всем')), rot.el)
+  const rotCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h3', null, tr('Поворот всем'))), rot.el)
 
   $('#view').replaceChildren(h('div', { class: 'page global' }, consoleCard, h('div', { class: 'side-col' }, targetsCard, actionsCard, rotCard)))
   V = { id: 'global', console: con }
@@ -1588,7 +1617,7 @@ function renderGlobal () {
 
 function disconnectTargets () {
   const ids = S.targets.size ? [...S.targets] : [...S.bots.keys()]
-  Promise.all(ids.map(id => api.call('bot.disconnect', { id }).catch(() => {}))).then(() => toast('Отключены'))
+  Promise.all(ids.map(id => api.call('bot.disconnect', { id }).catch(() => {}))).then(() => toast(tr('Отключены')))
 }
 
 function renderTargets () {
@@ -1597,18 +1626,18 @@ function renderTargets () {
   for (const t of [...S.targets]) if (!S.bots.has(t)) S.targets.delete(t)
   const on = onlineCount()
   const pill = $('#g-pill')
-  if (pill) pill.replaceChildren(h('span', { class: 'dot ' + (on ? 'online' : 'offline') }), `${on} из ${S.bots.size} в сети`)
+  if (pill) pill.replaceChildren(h('span', { class: 'dot ' + (on ? 'online' : 'offline') }), tr('{0} из {1} в сети', on, S.bots.size))
 
   const sorted = [...S.order].map(id => S.bots.get(id)).filter(Boolean)
     .sort((a, b) => (b.state === 'online') - (a.state === 'online'))
   const selOnline = [...S.targets].filter(id => S.bots.get(id)?.state === 'online').length
   card.replaceChildren(
-    h('div', { class: 'card-head' }, h('h3', null, 'Кому'), h('div', { class: 'spacer' }),
-      h('button', { class: 'btn ghost sm', onclick: () => { for (const b of S.bots.values()) S.targets.add(b.id); saveTargets() } }, 'Все'),
-      h('button', { class: 'btn ghost sm', onclick: () => { S.targets.clear(); saveTargets() } }, 'Сброс')),
+    h('div', { class: 'card-head' }, h('h3', null, tr('Кому')), h('div', { class: 'spacer' }),
+      h('button', { class: 'btn ghost sm', onclick: () => { for (const b of S.bots.values()) S.targets.add(b.id); saveTargets() } }, tr('Все')),
+      h('button', { class: 'btn ghost sm', onclick: () => { S.targets.clear(); saveTargets() } }, tr('Сброс'))),
     h('div', { class: 'targets-info' }, S.targets.size
-      ? `Выбрано ${S.targets.size}, из них в сети ${selOnline}`
-      : `Никто не выбран → команды получат все онлайн (${on})`),
+      ? tr('Выбрано {0}, из них в сети {1}', S.targets.size, selOnline)
+      : tr('Никто не выбран → команды получат все онлайн ({0})', on)),
     h('div', { class: 'targets' }, sorted.length ? sorted.map(b => h('div', {
       class: 'target' + (S.targets.has(b.id) ? ' on' : '') + (b.state === 'online' ? '' : ' dim'),
       onclick: () => { S.targets.has(b.id) ? S.targets.delete(b.id) : S.targets.add(b.id); saveTargets() },
@@ -1619,7 +1648,7 @@ function renderTargets () {
     h('span', { class: 'nm' }, botName(b)),
     b.live ? h('span', { class: 'hp' }, `♥ ${f1(b.live.health)}`) : null,
     h('span', { class: 'dot ' + b.state })
-    )) : h('div', { class: 'empty-list' }, 'Нет ботов')))
+    )) : h('div', { class: 'empty-list' }, tr('Нет ботов'))))
 }
 function saveTargets () {
   ls.set('targets', [...S.targets])
@@ -1628,7 +1657,7 @@ function saveTargets () {
 }
 function renderGlobalTopbarLabel () {
   const btn = $('#topbar .btn')
-  if (btn) btn.lastChild.textContent = S.targets.size ? 'Подключить выбранных' : 'Подключить всех'
+  if (btn) btn.lastChild.textContent = S.targets.size ? tr('Подключить выбранных') : tr('Подключить всех')
 }
 
 // ============================================================
@@ -1637,14 +1666,14 @@ function renderGlobalTopbarLabel () {
 function serverPicker (initial) {
   const g = S.settings.server
   let custom = !!(initial && initial.host)
-  const host = h('input', { class: 'input', placeholder: 'mc.example.com  или  1.2.3.4:25565', value: initial?.host ? serverStr(initial) : '' })
+  const host = h('input', { class: 'input', placeholder: tr('mc.example.com  или  1.2.3.4:25565'), value: initial?.host ? serverStr(initial) : '' })
   const ver = versionSelect(initial?.version || 'auto')
   const fields = h('div', { class: 'stack', style: { gap: '8px' } },
-    h('div', { class: 'field' }, h('span', null, 'Адрес сервера'), host,
-      h('div', { class: 'hint' }, 'Порт можно не писать — тогда 25565 или SRV-запись домена, как в обычном клиенте.')),
-    h('div', { class: 'field' }, h('span', null, 'Версия'), ver))
-  const bGlobal = h('button', { type: 'button' }, `Глобальный · ${serverStr(g)}`)
-  const bCustom = h('button', { type: 'button' }, 'Свой сервер')
+    h('div', { class: 'field' }, h('span', null, tr('Адрес сервера')), host,
+      h('div', { class: 'hint' }, tr('Порт можно не писать — тогда 25565 или SRV-запись домена, как в обычном клиенте.'))),
+    h('div', { class: 'field' }, h('span', null, tr('Версия')), ver))
+  const bGlobal = h('button', { type: 'button' }, tr('Глобальный · {0}', serverStr(g)))
+  const bCustom = h('button', { type: 'button' }, tr('Свой сервер'))
   const sync = () => {
     bGlobal.classList.toggle('on', !custom)
     bCustom.classList.toggle('on', custom)
@@ -1658,14 +1687,14 @@ function serverPicker (initial) {
     value () {
       if (!custom) return null
       const hv = host.value.trim()
-      if (!hv) throw new Error('Укажи адрес сервера')
+      if (!hv) throw new Error(tr('Укажи адрес сервера'))
       return { host: hv, port: null, version: ver.value } // backend splits "host:port"
     }
   }
 }
 
 function versionSelect (value) {
-  const sel = h('select', { class: 'input' }, VERSIONS.map(v => h('option', { value: v, selected: v === value }, v === 'auto' ? 'Авто (спросить сервер)' : v)))
+  const sel = h('select', { class: 'input' }, VERSIONS.map(v => h('option', { value: v, selected: v === value }, v === 'auto' ? tr('Авто (спросить сервер)') : v)))
   if (!VERSIONS.includes(value)) sel.append(h('option', { value, selected: true }, value))
   return sel
 }
@@ -1684,9 +1713,9 @@ function addBotsModal () {
   const prefix = h('input', { class: 'input', value: 'Bot_', style: { width: '110px' } })
   const count = h('input', { class: 'input', type: 'number', value: 5, min: 1, max: 500, style: { width: '80px' } })
   const offlineTab = h('div', { class: 'stack' },
-    h('div', { class: 'field' }, h('span', null, 'Ники, по одному на строку'), names,
-      h('div', { class: 'hint' }, 'Для серверов с online-mode=false. 1–16 символов: латиница, цифры, _.')),
-    h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Сгенерировать'), prefix, count,
+    h('div', { class: 'field' }, h('span', null, tr('Ники, по одному на строку')), names,
+      h('div', { class: 'hint' }, tr('Для серверов с online-mode=false. 1–16 символов: латиница, цифры, _.'))),
+    h('div', { class: 'row' }, h('span', { class: 'muted' }, tr('Сгенерировать')), prefix, count,
       h('button', {
         class: 'btn sm',
         onclick: () => {
@@ -1696,33 +1725,33 @@ function addBotsModal () {
           const list = Array.from({ length: n }, (_, i) => p + String(i + 1).padStart(width, '0'))
           names.value = (names.value.trim() ? names.value.trim() + '\n' : '') + list.join('\n')
         }
-      }, 'Добавить в список')))
+      }, tr('Добавить в список'))))
 
   // microsoft
   const msaArea = h('div', { class: 'stack' })
   const msaTab = h('div', { class: 'stack' },
-    h('div', { class: 'muted' }, 'Официальный вход по коду (device code). Пароль Botify не видит: ты вводишь код на сайте Microsoft, токены сохраняются локально в data/auth-cache.'),
+    h('div', { class: 'muted' }, tr('Официальный вход по коду (device code). Пароль Botify не видит: ты вводишь код на сайте Microsoft, токены сохраняются локально в data/auth-cache.')),
     msaArea)
   function msaIdle () {
-    msaArea.replaceChildren(h('button', { class: 'btn primary', onclick: startMsa }, 'Войти через Microsoft'))
+    msaArea.replaceChildren(h('button', { class: 'btn primary', onclick: startMsa }, tr('Войти через Microsoft')))
   }
   async function startMsa () {
     let srv
     try { srv = server.value() } catch (e) { toast(e.message, true); return }
-    msaArea.replaceChildren(h('div', { class: 'row muted' }, h('span', { class: 'spin' }), 'Запрашиваю код…'))
+    msaArea.replaceChildren(h('div', { class: 'row muted' }, h('span', { class: 'spin' }), tr('Запрашиваю код…')))
     S.msaHandler = (d) => {
       msaArea.replaceChildren(h('div', { class: 'code-box' },
-        h('div', { class: 'muted' }, 'Открой страницу и введи код'),
+        h('div', { class: 'muted' }, tr('Открой страницу и введи код')),
         h('div', { class: 'code' }, d.code),
         h('div', { class: 'row' },
-          h('button', { class: 'btn sm', onclick: () => copy(d.code) }, icon('copy'), 'Скопировать'),
+          h('button', { class: 'btn sm', onclick: () => copy(d.code) }, icon('copy'), tr('Скопировать')),
           h('a', { class: 'btn sm primary', href: d.url, target: '_blank', rel: 'noreferrer' }, icon('ext'), d.url.replace(/^https?:\/\//, ''))),
-        h('div', { class: 'row muted' }, h('span', { class: 'spin' }), 'Жду подтверждения…')))
+        h('div', { class: 'row muted' }, h('span', { class: 'spin' }), tr('Жду подтверждения…'))))
     }
     try {
       const r = await api.call('accounts.microsoftLogin', { server: srv })
-      msaArea.replaceChildren(h('div', { class: 'code-box' }, h('div', { class: 'code', style: { fontSize: '20px', letterSpacing: '0' } }, `✓ ${r.name}`), h('div', { class: 'muted' }, 'Аккаунт добавлен'),
-        h('button', { class: 'btn sm', onclick: msaIdle }, 'Добавить ещё один')))
+      msaArea.replaceChildren(h('div', { class: 'code-box' }, h('div', { class: 'code', style: { fontSize: '20px', letterSpacing: '0' } }, `✓ ${r.name}`), h('div', { class: 'muted' }, tr('Аккаунт добавлен')),
+        h('button', { class: 'btn sm', onclick: msaIdle }, tr('Добавить ещё один'))))
     } catch (e) {
       if (!/отменено/.test(e.message)) toast(e.message, true)
       msaIdle()
@@ -1733,19 +1762,19 @@ function addBotsModal () {
   msaIdle()
 
   // tokens
-  const tokens = h('textarea', { class: 'input', rows: 7, placeholder: 'eyJhbGciOi...            ← access token (JWT)\nM.C5xx_BAY.0.U.-Cg...     ← refresh token\nM.C5xx...|client_id       ← refresh token + свой client id\n{"accessToken":"...","refreshToken":"..."}\n__Host-MSAAUTHP=...; ...  ← куки login.live.com (весь блок)' })
-  const clientId = h('input', { class: 'input', placeholder: 'необязательно — по умолчанию перебираются стандартные' })
+  const tokens = h('textarea', { class: 'input', rows: 7, placeholder: tr('eyJhbGciOi...            ← access token (JWT)\nM.C5xx_BAY.0.U.-Cg...     ← refresh token\nM.C5xx...|client_id       ← refresh token + свой client id\n{"accessToken":"...","refreshToken":"..."}\n__Host-MSAAUTHP=...; ...  ← куки login.live.com (весь блок)') })
+  const clientId = h('input', { class: 'input', placeholder: tr('необязательно — по умолчанию перебираются стандартные') })
   const results = h('div', { class: 'result-list' })
   const tokenTab = h('div', { class: 'stack' },
-    h('div', { class: 'field' }, h('span', null, 'Токены / куки'), tokens,
-      h('div', { class: 'hint' }, 'Тип определяется сам: по строке на токен, либо вставь целиком куки login.live.com (заголовок Cookie или Netscape-файл — нужен __Host-MSAAUTH(P)). Куки меняются на refresh token при импорте и сами не сохраняются. Access token живёт ~24 ч, refresh обновляется автоматически. Всё проверяется у Mojang и хранится в data/accounts.json.')),
-    h('div', { class: 'field' }, h('span', null, 'Client ID для refresh-токенов'), clientId),
+    h('div', { class: 'field' }, h('span', null, tr('Токены / куки')), tokens,
+      h('div', { class: 'hint' }, tr('Тип определяется сам: по строке на токен, либо вставь целиком куки login.live.com (заголовок Cookie или Netscape-файл — нужен __Host-MSAAUTH(P)). Куки меняются на refresh token при импорте и сами не сохраняются. Access token живёт ~24 ч, refresh обновляется автоматически. Всё проверяется у Mojang и хранится в data/accounts.json.'))),
+    h('div', { class: 'field' }, h('span', null, tr('Client ID для refresh-токенов')), clientId),
     results)
 
   const TABS = {
-    offline: { label: 'Оффлайн', el: offlineTab, btn: 'Добавить' },
+    offline: { label: tr('Оффлайн'), el: offlineTab, btn: tr('Добавить') },
     microsoft: { label: 'Microsoft', el: msaTab, btn: null },
-    tokens: { label: 'Токены', el: tokenTab, btn: 'Проверить и добавить' }
+    tokens: { label: tr('Токены'), el: tokenTab, btn: tr('Проверить и добавить') }
   }
   function show (t) {
     tab = t
@@ -1761,24 +1790,24 @@ function addBotsModal () {
     try { srv = server.value() } catch (e) { toast(e.message, true); return }
     if (tab === 'offline') {
       const list = names.value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean)
-      if (!list.length) { toast('Впиши хотя бы один ник', true); return }
+      if (!list.length) { toast(tr('Впиши хотя бы один ник'), true); return }
       footBtn.disabled = true
       try {
         const r = await act('accounts.addOffline', { names: list, server: srv })
-        if (r.errors.length) toast(`Добавлено ${r.added}. Пропущено: ${r.errors.join('; ')}`, true)
-        else { toast(`Добавлено ботов: ${r.added}`); m.close() }
+        if (r.errors.length) toast(tr('Добавлено {0}. Пропущено: {1}', r.added, r.errors.join('; ')), true)
+        else { toast(tr('Добавлено ботов: {0}', r.added)); m.close() }
         if (r.added) names.value = ''
       } finally { footBtn.disabled = false }
     } else if (tab === 'tokens') {
-      if (!tokens.value.trim()) { toast('Вставь токены', true); return }
+      if (!tokens.value.trim()) { toast(tr('Вставь токены'), true); return }
       footBtn.disabled = true
-      footBtn.textContent = 'Проверяю…'
+      footBtn.textContent = tr('Проверяю…')
       results.replaceChildren()
       try {
         const r = await act('accounts.importTokens', { text: tokens.value, clientId: clientId.value.trim() || null, server: srv })
-        results.replaceChildren(...r.map(x => h('div', { class: x.ok ? 'ok' : 'bad' }, x.ok ? `${x.name}${x.updated ? ' — обновлён' : ' — добавлен'}` : `${x.raw ? x.raw + ' — ' : ''}${x.error}`)))
+        results.replaceChildren(...r.map(x => h('div', { class: x.ok ? 'ok' : 'bad' }, x.ok ? `${x.name}${x.updated ? tr(' — обновлён') : tr(' — добавлен')}` : `${x.raw ? x.raw + ' — ' : ''}${x.error}`)))
         const ok = r.filter(x => x.ok).length
-        if (ok) toast(`Готово: ${ok} из ${r.length}`)
+        if (ok) toast(tr('Готово: {0} из {1}', ok, r.length))
         if (ok === r.length) tokens.value = ''
       } catch {} finally {
         footBtn.disabled = false
@@ -1787,12 +1816,12 @@ function addBotsModal () {
     }
   }
 
-  body.append(tabsEl, content, h('div', { class: 'divider' }), h('div', { class: 'sub-h' }, 'Сервер'), server.el)
+  body.append(tabsEl, content, h('div', { class: 'divider' }), h('div', { class: 'sub-h' }, tr('Сервер')), server.el)
   const m = openModal({
-    title: 'Добавить ботов',
+    title: tr('Добавить ботов'),
     wide: true,
     body,
-    foot: [h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Закрыть'), footBtn],
+    foot: [h('button', { class: 'btn ghost', onclick: () => m.close() }, tr('Закрыть')), footBtn],
     onClose: () => { if (S.msaHandler) { api.call('accounts.cancelMicrosoft').catch(() => {}); S.msaHandler = null } cleanup() }
   })
   show(TABS[tab] ? tab : 'offline')
@@ -1800,58 +1829,63 @@ function addBotsModal () {
 
 function settingsModal () {
   const s = S.settings
-  const host = h('input', { class: 'input', value: serverStr(s.server), placeholder: 'mc.example.com  или  1.2.3.4:25565' })
+  const language = h('select', { class: 'input', id: 'settings-language', style: { width: '180px' } },
+    h('option', { value: 'ru', selected: getLanguage() === 'ru' }, 'Русский'),
+    h('option', { value: 'en', selected: getLanguage() === 'en' }, 'English'))
+  const host = h('input', { class: 'input', value: serverStr(s.server), placeholder: tr('mc.example.com  или  1.2.3.4:25565') })
   const ver = versionSelect(s.server.version || 'auto')
   const autoRe = h('input', { type: 'checkbox', checked: !!s.behavior.autoReconnect })
   const delay = h('input', { class: 'input', type: 'number', min: 1, value: Math.round((s.behavior.reconnectDelay || 5000) / 1000), style: { width: '90px' } })
   const stagger = h('input', { class: 'input', type: 'number', min: 0, step: 100, value: s.behavior.joinStagger ?? 1500, style: { width: '90px' } })
-  const view = h('select', { class: 'input', style: { width: '150px' } }, [['tiny', 'Крошечная (2)'], ['short', 'Малая (4)'], ['normal', 'Средняя (8)'], ['far', 'Далёкая (12)']].map(([v, t]) => h('option', { value: v, selected: v === s.behavior.viewDistance }, t)))
+  const view = h('select', { class: 'input', style: { width: '150px' } }, [['tiny', tr('Крошечная (2)')], ['short', tr('Малая (4)')], ['normal', tr('Средняя (8)')], ['far', tr('Далёкая (12)')]].map(([v, t]) => h('option', { value: v, selected: v === s.behavior.viewDistance }, t)))
   let theme = s.ui?.theme || 'dark'
   const themeSeg = h('div', { class: 'seg' })
-  const drawTheme = () => themeSeg.replaceChildren(...[['dark', 'Тёмная'], ['light', 'Светлая']].map(([k, t]) => h('button', { type: 'button', class: k === theme ? 'on' : '', onclick: () => { theme = k; applyTheme(k); drawTheme() } }, t)))
+  const drawTheme = () => themeSeg.replaceChildren(...[['dark', tr('Тёмная')], ['light', tr('Светлая')]].map(([k, t]) => h('button', { type: 'button', class: k === theme ? 'on' : '', onclick: () => { theme = k; applyTheme(k); drawTheme() } }, t)))
   drawTheme()
 
   const body = h('div', { class: 'stack' },
-    h('div', { class: 'sub-h' }, 'Глобальный сервер'),
-    h('div', { class: 'field' }, h('span', null, 'Адрес сервера'), host,
-      h('div', { class: 'hint' }, 'Порт не обязателен: без него — 25565 или SRV-запись домена (как в обычном клиенте).')),
-    h('div', { class: 'field' }, h('span', null, 'Версия'), ver,
-      h('div', { class: 'hint' }, 'Авто — бот спросит версию у сервера. Боты без своего сервера заходят сюда.')),
+    h('div', { class: 'sub-h' }, tr('Глобальный сервер')),
+    h('div', { class: 'field' }, h('span', null, tr('Адрес сервера')), host,
+      h('div', { class: 'hint' }, tr('Порт не обязателен: без него — 25565 или SRV-запись домена (как в обычном клиенте).'))),
+    h('div', { class: 'field' }, h('span', null, tr('Версия')), ver,
+      h('div', { class: 'hint' }, tr('Авто — бот спросит версию у сервера. Боты без своего сервера заходят сюда.'))),
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Поведение'),
-    h('label', { class: 'toggle-row' }, h('div', { class: 't' }, 'Автопереподключение', h('small', null, 'после кика или обрыва, с нарастающей паузой')), h('span', { class: 'switch' }, autoRe, h('i'))),
-    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, 'Пауза перед переподключением, с'), delay),
-    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, 'Пауза между входами аккаунтов, мс', h('small', null, 'аккаунты входят по одному; следующий — после входа или ошибки предыдущего')), stagger),
-    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, 'Дальность прорисовки', h('small', null, 'меньше — меньше памяти на бота')), view),
+    h('div', { class: 'sub-h' }, tr('Поведение')),
+    h('label', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Автопереподключение'), h('small', null, tr('после кика или обрыва, с нарастающей паузой'))), h('span', { class: 'switch' }, autoRe, h('i'))),
+    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Пауза перед переподключением, с')), delay),
+    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Пауза между входами аккаунтов, мс'), h('small', null, tr('аккаунты входят по одному; следующий — после входа или ошибки предыдущего'))), stagger),
+    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Дальность прорисовки'), h('small', null, tr('меньше — меньше памяти на бота'))), view),
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Вид'),
-    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, 'Тема'), themeSeg),
+    h('div', { class: 'sub-h' }, tr('Вид')),
+    h('label', { class: 'toggle-row', for: 'settings-language' }, h('div', { class: 't' }, tr('Язык')), language),
+    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Тема')), themeSeg),
     h('div', { class: 'divider' }),
-    h('div', { class: 'sub-h' }, 'Данные'),
-    h('div', { class: 'field' }, h('div', { class: 'hint' }, 'Всё хранится локально, обычным JSON:'),
+    h('div', { class: 'sub-h' }, tr('Данные')),
+    h('div', { class: 'field' }, h('div', { class: 'hint' }, tr('Всё хранится локально, обычным JSON:')),
       h('div', { class: 'row' }, h('code', { class: 'mono', style: { fontSize: '12px', userSelect: 'text', overflowWrap: 'anywhere' } }, S.dataDir),
-        h('button', { class: 'icon-btn sm', title: 'Скопировать путь', onclick: () => copy(S.dataDir) }, icon('copy'))),
-      h('div', { class: 'hint' }, 'settings.json — настройки · accounts.json — боты и токены · auth-cache/ — кэш входа Microsoft'))
+        h('button', { class: 'icon-btn sm', title: tr('Скопировать путь'), onclick: () => copy(S.dataDir) }, icon('copy'))),
+      h('div', { class: 'hint' }, tr('settings.json — настройки · accounts.json — боты и токены · auth-cache/ — кэш входа Microsoft')))
   )
   const m = openModal({
-    title: 'Настройки',
+    title: tr('Настройки'),
     body,
     foot: [
-      h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Отмена'),
+      h('button', { class: 'btn ghost', onclick: () => m.close() }, tr('Отмена')),
       h('button', {
         class: 'btn primary',
         onclick: async () => {
-          if (!host.value.trim()) { toast('Укажи адрес сервера', true); return }
+          if (!host.value.trim()) { toast(tr('Укажи адрес сервера'), true); return }
           await act('settings.update', {
             patch: {
               server: { host: host.value.trim(), port: null, version: ver.value },
               behavior: { autoReconnect: autoRe.checked, reconnectDelay: Math.max(1, Number(delay.value) || 5) * 1000, joinStagger: Math.max(0, Number(stagger.value) || 0), viewDistance: view.value },
-              ui: { theme }
+              ui: { theme, language: language.value }
             }
-          }, 'Сохранено')
+          })
+          toast(tr('Сохранено'))
           m.close()
         }
-      }, 'Сохранить')
+      }, tr('Сохранить'))
     ],
     onClose: () => applyTheme(S.settings.ui?.theme || 'dark')
   })
@@ -1862,33 +1896,33 @@ function botSettingsModal (id) {
   if (!b) return
   const server = serverPicker(b.server.custom ? b.server : null)
   const nick = h('input', { class: 'input', value: b.username })
-  const note = h('input', { class: 'input', value: b.note || '', placeholder: 'например: фармит железо' })
+  const note = h('input', { class: 'input', value: b.note || '', placeholder: tr('например: фармит железо') })
   let ar = b.autoReconnect == null ? 'inherit' : (b.autoReconnect ? 'on' : 'off')
   const arSeg = h('div', { class: 'seg' })
-  const drawAr = () => arSeg.replaceChildren(...[['inherit', 'Как в настройках'], ['on', 'Вкл'], ['off', 'Выкл']].map(([k, t]) => h('button', { type: 'button', class: k === ar ? 'on' : '', onclick: () => { ar = k; drawAr() } }, t)))
+  const drawAr = () => arSeg.replaceChildren(...[['inherit', tr('Как в настройках')], ['on', tr('Вкл')], ['off', tr('Выкл')]].map(([k, t]) => h('button', { type: 'button', class: k === ar ? 'on' : '', onclick: () => { ar = k; drawAr() } }, t)))
   drawAr()
 
   const body = h('div', { class: 'stack' },
-    b.type === 'offline' ? h('div', { class: 'field' }, h('span', null, 'Ник'), nick) : null,
-    h('div', { class: 'sub-h' }, 'Сервер'),
+    b.type === 'offline' ? h('div', { class: 'field' }, h('span', null, tr('Ник')), nick) : null,
+    h('div', { class: 'sub-h' }, tr('Сервер')),
     server.el,
     h('div', { class: 'divider' }),
-    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, 'Автопереподключение'), arSeg),
-    h('div', { class: 'field' }, h('span', null, 'Заметка'), note),
+    h('div', { class: 'toggle-row' }, h('div', { class: 't' }, tr('Автопереподключение')), arSeg),
+    h('div', { class: 'field' }, h('span', null, tr('Заметка')), note),
     h('div', { class: 'divider' }),
     h('dl', { class: 'kv', style: { padding: 0 } },
-      h('dt', null, 'Тип'), h('dd', null, TYPE_LABEL[b.type] || b.type),
+      h('dt', null, tr('Тип')), h('dd', null, TYPE_LABEL()[b.type] || b.type),
       h('dt', null, 'UUID'), h('dd', { class: 'copy', onclick: () => b.uuid && copy(b.uuid) }, b.uuid || '—'),
-      b.tokenExpiresAt ? [h('dt', null, 'Токен истекает'), h('dd', null, new Date(b.tokenExpiresAt).toLocaleString())] : null,
+      b.tokenExpiresAt ? [h('dt', null, tr('Токен истекает')), h('dd', null, new Date(b.tokenExpiresAt).toLocaleString(getLanguage() === 'en' ? 'en-US' : 'ru-RU'))] : null,
       h('dt', null, 'ID'), h('dd', { class: 'mono' }, b.id))
   )
   const m = openModal({
-    title: 'Настройки бота',
+    title: tr('Настройки бота'),
     head: headImg(b, 'sm'),
     body,
     foot: [
-      h('button', { class: 'btn ghost left', onclick: () => { m.close(); removeBot(id) } }, icon('trash'), 'Удалить'),
-      h('button', { class: 'btn ghost', onclick: () => m.close() }, 'Отмена'),
+      h('button', { class: 'btn ghost left danger', onclick: () => { m.close(); removeBot(id) } }, icon('trash'), tr('Удалить')),
+      h('button', { class: 'btn ghost', onclick: () => m.close() }, tr('Отмена')),
       h('button', {
         class: 'btn primary',
         onclick: async () => {
@@ -1896,16 +1930,16 @@ function botSettingsModal (id) {
           try { srv = server.value() } catch (e) { toast(e.message, true); return }
           const patch = { server: srv, note: note.value, autoReconnect: ar === 'inherit' ? null : ar === 'on' }
           if (b.type === 'offline' && nick.value.trim() !== b.username) patch.username = nick.value.trim()
-          await act('bot.update', { id, patch }, 'Сохранено')
+          await act('bot.update', { id, patch }, tr('Сохранено'))
           m.close()
           const cur = S.bots.get(id)
           const before = b.server.custom ? `${serverStr(b.server)}|${b.server.version}` : ''
           const after = srv ? `${srv.host}|${srv.version}` : ''
           if (cur && isActive(cur) && (patch.username || before !== after)) {
-            toast('Переподключи бота, чтобы применить')
+            toast(tr('Переподключи бота, чтобы применить'))
           }
         }
-      }, 'Сохранить')
+      }, tr('Сохранить'))
     ]
   })
 }
@@ -1950,4 +1984,6 @@ window.addEventListener('blur', hideTip)
 
 // ============================================================
 if (window.botifyShell?.platform) document.body.classList.add('platform-' + window.botifyShell.platform)
+setLanguage(ls.get('language', 'ru'))
+translateStatic()
 api.connect()
