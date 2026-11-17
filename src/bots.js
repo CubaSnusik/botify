@@ -7,6 +7,7 @@ const { EventEmitter } = require('events')
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements } = require('mineflayer-pathfinder')
 const { isFriend, friendCommand } = require('./friends')
+const { swimJump } = require('./water-nav')
 const { Authflow, Titles } = require('prismarine-auth')
 const { makeAuthHook, resolveSession, tokenExpiresAt } = require('./auth')
 const { isRateLimited, authRetryDelay, isAlreadyOnline } = require('./connection-errors')
@@ -341,6 +342,8 @@ class BotInstance extends EventEmitter {
       // Swimming still runs on Prismarine's (unverified) fluid physics: prefer dry routes.
       mov.liquidCost = 20
       bot.pathfinder.setMovements(mov)
+      // Swim up only when needed: holding jump climbs waterfall walls (src/water-nav.js).
+      bot._botifySwimJump = next => swimJump(bot, next)
       bot.pathfinder.enablePathShortcut = true
       bot.pathfinder.tickTimeout = 8 // re-tuned per command in commands.js (shared CPU budget)
       // `.walkmode тест`: look where walking (yaw and pitch), W only. Read live from settings.

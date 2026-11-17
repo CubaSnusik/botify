@@ -3,6 +3,7 @@ const { PlayerState } = require('prismarine-physics')
 const { goals } = require('mineflayer-pathfinder')
 const { joinCircleFormation } = require('./circle-formation')
 const { releaseSprint } = require('./movement-physics')
+const { swimJump } = require('./water-nav')
 const DEG = Math.PI / 180
 const wrap = angle => Math.atan2(Math.sin(angle), Math.cos(angle))
 const HAZARDS = /^(water|lava|fire|soul_fire|cobweb|powder_snow|sweet_berry_bush|cactus|magma_block)$/
@@ -137,8 +138,9 @@ function startFollowing (bot, entity, distance, { spin = false, spinSpeed = 120,
     const { point, path, physics } = route
     // Walk tight routes: sprint-jump impulses point along the head, which rotates
     // independently of the route. The planner still supplies obstacle/jump nodes.
-    let jump = bot.entity.isInWater
-    if (!jump && !physics.canStraightLine(path)) {
+    const inWater = bot.entity.isInWater
+    let jump = inWater && swimJump(bot, point)
+    if (!inWater && !jump && !physics.canStraightLine(path)) {
       if (!physics.canWalkJump(path)) { apply(null); return }
       jump = true
     }

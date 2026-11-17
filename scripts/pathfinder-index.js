@@ -1120,7 +1120,8 @@ function inject (bot) {
     // Sprinting off high ledges overshoots the landing node; up to 2 blocks it is harmless.
     const bigDrop = nextPoint.y < p.y - 2.5
     if (bot.entity.isInWater) {
-      applyKeys(keys, true, false, 'water')
+      // Botify: no blind swim-up (waterfall walls); src/water-nav.js decides.
+      applyKeys(keys, bot._botifySwimJump ? bot._botifySwimJump(nextPoint) : true, false, 'water')
     } else if (aim !== nextPoint) {
       // Rounding a wall corner on flat ground: both legs were checked as clear corridors.
       applyKeys(keys, false, stateMovements.allowSprinting, 'corner')
